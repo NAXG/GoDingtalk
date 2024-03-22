@@ -43,7 +43,7 @@ cd GoDingtalk
 
 https://gitee.com/edmund-shelby/m3u8-downloader
 
-本工具代码都是baidu comate生成的，本人稍加润色。
+本工具代码都是baidu comate生成的，包括 README.md 本人稍加润色。
 
 https://comate.baidu.com/?inviteCode=6gfx8i2y
 
