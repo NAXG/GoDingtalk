@@ -40,8 +40,11 @@ cd GoDingtalk
 本工具仅供学习和研究目的，请勿用于非法用途。用户因使用本工具产生的一切后果，本项目开发者不承担任何责任。
 
 ## 参考
+
 https://gitee.com/edmund-shelby/m3u8-downloader
 
 本工具代码都是baidu comate生成的，本人稍加润色。
+
 https://comate.baidu.com/?inviteCode=6gfx8i2y
+
 ![shareImg.jpeg](img%2FshareImg.jpeg)
