@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/url"
 	"os"
 	"strings"
@@ -23,7 +22,7 @@ const (
 	SaveAsTsFileAndMergeModel  = 2
 	SuffixMp4                  = ".ts"
 	SuffixTs                   = ".ts"
-	TestDownloadUrl            = "https://v2.dious.cc/20201008/ojroOJOt/1000kb/hls/index.m3u8"
+	TestDownloadUrl            = ""
 )
 
 const (
@@ -211,7 +210,7 @@ func (md *m3u8downloader) httpGetBodyToByte(url string) []byte {
 		return nil
 	}
 	defer res.Close()
-	body, err := ioutil.ReadAll(res)
+	body, err := io.ReadAll(res)
 	if err != nil {
 		md.exception = IOException
 		return nil

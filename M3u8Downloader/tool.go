@@ -3,7 +3,6 @@ package M3u8Downloader
 import (
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/url"
 	"os"
@@ -28,7 +27,7 @@ func processNum(n int) []byte {
 
 // getAllNonDirectoryFile 获取所有非目录文件
 func getAllNonDirectoryFile(pathName string) ([]string, error) {
-	rd, err := ioutil.ReadDir(pathName)
+	rd, err := os.ReadDir(pathName)
 	if err != nil {
 		return nil, errorMap[ReadDirectoryException]
 	}
@@ -87,7 +86,7 @@ func mergeFile(path string, fileList []string, saveName string) error {
 		if err != nil {
 			return err
 		}
-		body, err = ioutil.ReadAll(tsFile)
+		body, err = io.ReadAll(tsFile)
 		if err != nil {
 			return err
 		}
