@@ -1,0 +1,41 @@
+## 🎉 GoDingtalk v2.0.0 - 重大优化版本
+
+### ✨ 主要新增
+- 配置文件支持 (config.json)
+- 智能 Cookie 管理，避免重复登录
+- 自定义保存目录 (-saveDir 参数)
+- 批量下载增强（支持注释和空行）
+
+### 🔧 稳定性
+- 完善错误处理机制
+- 并发安全保护（修复数据竞争）
+- 更新 chromedp 到 v0.14.2
+- 抑制 CDP 非致命错误日志
+
+### ⚡ 性能
+- HTTP 连接池复用
+- 流式文件合并，减少内存占用
+- 优化并发控制
+
+### 🐛 修复
+- 修复并发访问数据竞争
+- 修复批量下载重复登录
+- 修复文件合并内存过高
+- 修复 Chrome 浏览器不显示
+
+### 📦 支持平台
+- Windows (AMD64)
+- macOS (Intel + Apple Silicon)
+- Linux (AMD64 + ARM64)
+
+### 📥 安装
+1. 下载对应平台的二进制文件
+2. macOS/Linux 添加执行权限: `chmod +x GoDingtalk_v2.0.0_*`
+3. 运行: `./GoDingtalk_v2.0.0_* -url="your_url"`
+
+### ⚠️ 前提条件
+- FFmpeg (视频转换)
+- Google Chrome (自动登录)
+
+**完整文档**: [README.md](https://github.com/NAXG/GoDingtalk/blob/master/README.md)
+**变更日志**: [CHANGELOG.md](https://github.com/NAXG/GoDingtalk/blob/master/CHANGELOG.md)
