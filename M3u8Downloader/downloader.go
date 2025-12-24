@@ -50,15 +50,15 @@ var (
 func init() {
 	downloadModelMap[WriteIntoCacheAndSaveModel] = WriteIntoCacheAndSaveModel
 	downloadModelMap[SaveAsTsFileAndMergeModel] = SaveAsTsFileAndMergeModel
-	errorMap[UrlException] = errors.New("[URLException]:Please check you url")
-	errorMap[IOException] = errors.New("[IOException]:fuck！")
-	errorMap[ReadDirectoryException] = errors.New("[ReadDirectoryException]:fuck！")
-	errorMap[NetworkException] = errors.New("[NetworkException]:fuck！")
-	errorMap[InvalidM3u8Exception] = errors.New("[InvalidM3u8Exception]:fuck！")
-	errorMap[InvalidEXT_X_KEY] = errors.New("[InvalidEXT_X_KEY]:fuck！")
-	errorMap[InvalidEXT_X_KEYMethod] = errors.New("[InvalidEXT_X_KEY]:fuck！")
-	errorMap[NoM3u8SegmentException] = errors.New("[NoM3u8SegmentException]:can not found any segment！")
-	errorMap[DecrytTSFailed] = errors.New("[DecrytTSFailed]:can not found any segment！")
+	errorMap[UrlException] = errors.New("[URLException]: Invalid URL format, please check your URL")
+	errorMap[IOException] = errors.New("[IOException]: Failed to read or write file")
+	errorMap[ReadDirectoryException] = errors.New("[ReadDirectoryException]: Failed to read directory")
+	errorMap[NetworkException] = errors.New("[NetworkException]: Network connection failed")
+	errorMap[InvalidM3u8Exception] = errors.New("[InvalidM3u8Exception]: Invalid M3U8 file format")
+	errorMap[InvalidEXT_X_KEY] = errors.New("[InvalidEXT_X_KEY]: Invalid encryption key in M3U8 file")
+	errorMap[InvalidEXT_X_KEYMethod] = errors.New("[InvalidEXT_X_KEYMethod]: Unsupported encryption method")
+	errorMap[NoM3u8SegmentException] = errors.New("[NoM3u8SegmentException]: No video segments found in M3U8 file")
+	errorMap[DecrytTSFailed] = errors.New("[DecryptTSFailed]: Failed to decrypt video segment")
 }
 
 // 自定义类型
@@ -136,6 +136,8 @@ type DownloadConfig struct {
 	ifShowBar bool
 	// errCount 下载出错的数量
 	errCount int
+	// errMutex 保护errCount的互斥锁
+	errMutex sync.Mutex
 	// completeCount 下载完成的数量
 	completeCount int
 	// TotalNum 总共的下载数量
@@ -390,12 +392,19 @@ func (md *m3u8downloader) download(threadId int, downloadModel func(int, int, []
 		//尝试下载，错误达到一定次数停止下载
 		for {
 			body = md.httpGetBodyToByte(fullURL)
-			if md.config.errCount < 2*md.config.NumOfThreads {
+			// 使用互斥锁保护errCount的读写
+			md.config.errMutex.Lock()
+			currentErrCount := md.config.errCount
+			md.config.errMutex.Unlock()
+
+			if currentErrCount < 2*md.config.NumOfThreads {
 				if md.exception == NoException {
 					break
 				}
 				//如果出现范围允许的错误，则重试
+				md.config.errMutex.Lock()
 				md.config.errCount++
+				md.config.errMutex.Unlock()
 				md.exception = NoException
 			} else {
 				//若出现严重错误，则通知其他线程，停止工作
@@ -410,8 +419,10 @@ func (md *m3u8downloader) download(threadId int, downloadModel func(int, int, []
 			if key != "" {
 				body, err = AES128Decrypt(body, []byte(key), []byte(segments.Key.IV))
 				if err != nil {
-					md.exception = DecrytTSFailed                   //放置异常类型
+					md.exception = DecrytTSFailed //放置异常类型
+					md.config.errMutex.Lock()
 					md.config.errCount = 2 * md.config.NumOfThreads //抛出严重异常
+					md.config.errMutex.Unlock()
 					md.waitGroup.Done()
 					return
 					//fmt.Printf("decryt TS failed: %s\n", err.Error())
@@ -440,7 +451,9 @@ func (md *m3u8downloader) SaveAsTsFileAndMergeEncryption(index, threadId int, bo
 	md.suffixList[index] = md.buffer[threadId].String()
 	movie, err := os.OpenFile(md.suffixList[index], os.O_CREATE|os.O_WRONLY, os.ModePerm)
 	if err != nil {
+		md.config.errMutex.Lock()
 		md.config.errCount += md.config.NumOfThreads
+		md.config.errMutex.Unlock()
 		md.exception = IOException
 		return
 	}
@@ -468,7 +481,9 @@ func (md *m3u8downloader) WriteIntoCacheAndSaveProcessor() {
 	buffer.WriteString(md.config.VideoName)
 	movie, err := os.OpenFile(buffer.String(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, os.ModePerm)
 	if err != nil {
+		md.config.errMutex.Lock()
 		md.config.errCount += md.config.NumOfThreads
+		md.config.errMutex.Unlock()
 		md.exception = IOException
 		return
 	}

@@ -1,0 +1,42 @@
+# 编译产物
+GoDingtalk
+GoDingtalk_*
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# 测试文件
+*.test
+*.out
+
+# Go 工作空间文件
+go.work
+
+# 依赖管理
+vendor/
+
+# IDE 配置
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# 用户数据
+cookies.json
+config.json
+*.mp4
+*.ts
+
+# 下载目录
+video/
+downloads/
+
+# 日志文件
+*.log
+
+# 临时文件
+*.tmp

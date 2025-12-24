@@ -1,0 +1,7 @@
+{
+  "thread_count": 10,
+  "save_directory": "video/",
+  "cookies_file": "cookies.json",
+  "chrome_timeout": 20,
+  "http_timeout": 30
+}

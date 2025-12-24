@@ -12,6 +12,16 @@ import (
 	"unsafe"
 )
 
+// 全局HTTP客户端，复用连接池
+var httpClient = &http.Client{
+	Timeout: 30 * time.Second,
+	Transport: &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     90 * time.Second,
+	},
+}
+
 // processNum 将小于10000的数字转化为字符串(前面补0)并添加后缀
 func processNum(n int) []byte {
 	if n < 10 {
@@ -44,10 +54,7 @@ func getAllNonDirectoryFile(pathName string) ([]string, error) {
 
 // httpGet 发起get请求
 func httpGet(url string) (io.ReadCloser, DownloadExceptionType) {
-	client := http.Client{
-		Timeout: 30 * time.Second,
-	}
-	resp, err := client.Get(url)
+	resp, err := httpClient.Get(url)
 	if err != nil {
 		if err.Error()[len(err.Error())-12:] == "no such host" {
 			return nil, NetworkException
@@ -77,24 +84,23 @@ func mergeFile(path string, fileList []string, saveName string) error {
 		return err
 	}
 	defer movie.Close()
-	var (
-		tsFile *os.File
-		body   []byte
-	)
+
+	var tsFile *os.File
+	// 使用流式复制，避免一次性读取整个文件到内存
 	for i := 0; i < len(fileList); i++ {
-		tsFile, err = os.OpenFile(fileList[i], os.O_CREATE|os.O_RDONLY, os.ModePerm)
+		tsFile, err = os.Open(fileList[i])
 		if err != nil {
 			return err
 		}
-		body, err = io.ReadAll(tsFile)
-		if err != nil {
-			return err
-		}
-		_, err = movie.Write(body)
-		if err != nil {
-			return err
-		}
+
+		// 使用 io.Copy 进行流式复制，内存占用小
+		_, err = io.Copy(movie, tsFile)
 		tsFile.Close()
+		if err != nil {
+			return err
+		}
+
+		// 复制完成后删除源文件
 		err = os.Remove(fileList[i])
 		if err != nil {
 			return err
