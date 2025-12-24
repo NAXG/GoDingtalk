@@ -9,7 +9,6 @@ import (
 	"path"
 	"strings"
 	"time"
-	"unsafe"
 )
 
 // 全局HTTP客户端，复用连接池
@@ -111,18 +110,8 @@ func mergeFile(path string, fileList []string, saveName string) error {
 
 // getUnixTimeAndToByte 根据加当前时间戳设置为默认名称
 func getUnixTimeAndToByte() string {
-	//将int64转化成string
-	t1 := time.Now().Unix()
-	var temp int64
-	var buf = make([]byte, 10)
-	var i = 9
-	for t1 > 0 {
-		temp = t1 % 10
-		buf[i] = (*(*byte)(unsafe.Pointer(&temp))) + 48
-		i--
-		t1 /= 10
-	}
-	return *(*string)(unsafe.Pointer(&buf))
+	// 直接使用标准库的转换函数
+	return fmt.Sprintf("%d", time.Now().Unix())
 }
 
 // ResolveURL 处理Url

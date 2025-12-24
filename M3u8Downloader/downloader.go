@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unsafe"
 )
 
 const (
@@ -261,8 +260,9 @@ func (md *m3u8downloader) SetNumOfThread(num int) {
 func (md *m3u8downloader) SetMovieName(videoName string) {
 	if strings.HasSuffix(videoName, SuffixMp4) {
 		md.config.VideoName = videoName
+	} else {
+		md.config.VideoName = videoName + SuffixMp4
 	}
-	md.config.VideoName = videoName + SuffixMp4
 }
 
 // SetSaveDirectory 设置下载的视频的保存路径
@@ -328,11 +328,9 @@ func (md *m3u8downloader) Download() error {
 	if err != nil {
 		return err
 	}
-	//	md.ParseM3u8File(*(*string)(unsafe.Pointer(&md.config.Url)))
-	//首先解析url
-	md.m3u8ParseResult, err = md.ParseM3u8FileEncrypted(*(*string)(unsafe.Pointer(&md.config.Url)))
+	// 首先解析url
+	md.m3u8ParseResult, err = md.ParseM3u8FileEncrypted(string(md.config.Url))
 	if err != nil {
-		//fmt.Println(err.Error())
 		return errorMap[UrlException]
 	}
 	if md.config.VideoName == "" {
@@ -562,7 +560,7 @@ func (md *m3u8downloader) parseM3u8FileUnencrypted(url string) {
 		} else if body[i] == '.' && body[i+1] == 't' {
 			i += 3
 			temp = body[left:i]
-			md.suffixList = append(md.suffixList, *(*string)(unsafe.Pointer(&temp)))
+			md.suffixList = append(md.suffixList, string(temp))
 		} else {
 			i++
 		}
@@ -627,8 +625,7 @@ func (md *m3u8downloader) ParseM3u8FileEncrypted(link string) (*Result, error) {
 			if keyByte == nil {
 				return nil, errorMap[md.exception]
 			}
-			//fmt.Println("decryption key: ", string(keyByte))
-			result.Keys[seg.Key] = *(*string)(unsafe.Pointer(&keyByte))
+			result.Keys[seg.Key] = string(keyByte)
 		default:
 			return nil, fmt.Errorf("[UnexpectedException]unknown or unsupported cryption method: %s", seg.Key.Method)
 		}

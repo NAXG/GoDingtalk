@@ -343,11 +343,18 @@ func main() {
 	fmt.Println(" |       | |  talk | |  |_|  | |  |_|  | |  |_|  | |  |_|  |")
 	fmt.Println(" |_______| |_______| |_______| |_______| |_______| |_______|")
 
+	// 加载配置文件
+	config, err := LoadConfig("config.json")
+	if err != nil {
+		fmt.Printf("警告: 加载配置文件失败: %v，使用默认配置\n", err)
+		config = DefaultConfig()
+	}
+
 	// 命令行参数
 	urlFlag := flag.String("url", "", "需要下载的回放URL，格式为 -url \"https://n.dingtalk.com/dingding/live-room/index.html?roomId=XXXX&liveUuid=XXXX\"")
 	urlFile := flag.String("urlFile", "", "包含需要下载的回放URL的文件路径，格式为 -urlFile \"/path/to/file\"")
-	Thread := flag.Int("thread", 10, "下载线程数")
-	saveDir := flag.String("saveDir", "video/", "视频保存目录")
+	Thread := flag.Int("thread", config.ThreadCount, "下载线程数")
+	saveDir := flag.String("saveDir", config.SaveDirectory, "视频保存目录")
 
 	flag.Parse()
 
@@ -380,7 +387,6 @@ func main() {
 	}
 
 	// 处理URL
-	var err error
 	if *urlFlag != "" {
 		err = processURL(*urlFlag, *saveDir, *Thread)
 	} else if *urlFile != "" {

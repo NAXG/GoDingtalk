@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"unicode/utf8"
-	"unsafe"
 )
 
 // 30  40  黑色
@@ -250,12 +249,12 @@ func (b *__bar) excursion(start, end int) {
 
 // printInLinux 在linux模式下的打印函数
 func (bc *BarConfig) printInLinux(str []byte, percent float32, currPos, total int64) {
-	_, _ = fmt.Fprintf(os.Stdout, printModel[bc.printModel], bc.showWay, bc.backColor, bc.frontColor, *(*string)(unsafe.Pointer(&str)), percent, currPos, total)
+	_, _ = fmt.Fprintf(os.Stdout, printModel[bc.printModel], bc.showWay, bc.backColor, bc.frontColor, string(str), percent, currPos, total)
 }
 
 // printInWindows windows模式下的打印函数
 func (bc *BarConfig) printInWindows(str []byte, percent float32, currPos, total int64) {
-	_, _ = fmt.Fprintf(os.Stdout, printModel[bc.printModel], *(*string)(unsafe.Pointer(&str)), percent, currPos, total)
+	_, _ = fmt.Fprintf(os.Stdout, printModel[bc.printModel], string(str), percent, currPos, total)
 }
 
 // Finish 完成处理方法，在完成后会将相关数据归零，以便重新使用
