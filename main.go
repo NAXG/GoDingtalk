@@ -21,6 +21,21 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
+// 全局HTTP客户端，在 main 中根据配置初始化
+var httpClient *http.Client
+
+// initHTTPClient 初始化全局HTTP客户端
+func initHTTPClient(timeout int) {
+	httpClient = &http.Client{
+		Timeout: time.Duration(timeout) * time.Second,
+		Transport: &http.Transport{
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 10,
+			IdleConnTimeout:     90 * time.Second,
+		},
+	}
+}
+
 // ffmpeg 把ts转换mp4
 func ffmpeg(ts, saveDir string) error {
 	fmt.Println("正在转换ts为mp4...")
@@ -46,7 +61,7 @@ func ffmpeg(ts, saveDir string) error {
 }
 
 // startChrome 函数启动Chrome浏览器，访问钉钉登录页面，获取并保存Cookies到本地文件。
-func startChrome() error {
+func startChrome(config *Config) error {
 	fmt.Println("正在启动Chrome获取Cookies...")
 
 	// 抑制 chromedp 的日志输出
@@ -69,8 +84,8 @@ func startChrome() error {
 	ctx, cancel := chromedp.NewContext(parentCtx)
 	defer cancel()
 
-	// 设置超时时间，确保扫码后能够及时跳转
-	ctx, cancel = context.WithTimeout(ctx, 20*time.Minute)
+	// 使用配置文件中的超时时间
+	ctx, cancel = context.WithTimeout(ctx, time.Duration(config.ChromeTimeout)*time.Minute)
 	defer cancel()
 
 	// 访问钉钉登录页面
@@ -102,14 +117,14 @@ func startChrome() error {
 			var err error
 			siteCookies, err = network.GetCookies().Do(ctx)
 			if err != nil {
-				return fmt.Errorf("failed to get cookies: %w", err)
+				return fmt.Errorf("获取 Cookies 失败: %w", err)
 			}
 			return nil
 		}),
 	)
 
 	if err != nil {
-		return fmt.Errorf("chrome automation failed: %w", err)
+		return fmt.Errorf("Chrome 自动化操作失败: %w", err)
 	}
 
 	// 保存cookies到文件
@@ -119,11 +134,11 @@ func startChrome() error {
 	}
 	jsonCookies, err := json.Marshal(cookies)
 	if err != nil {
-		return fmt.Errorf("failed to marshal cookies: %w", err)
+		return fmt.Errorf("序列化 Cookies 失败: %w", err)
 	}
 
-	if err := os.WriteFile("cookies.json", jsonCookies, 0600); err != nil {
-		return fmt.Errorf("failed to save cookies: %w", err)
+	if err := os.WriteFile(config.CookiesFile, jsonCookies, 0600); err != nil {
+		return fmt.Errorf("保存 Cookies 文件失败: %w", err)
 	}
 
 	fmt.Println("Cookies保存成功")
@@ -156,29 +171,29 @@ func M3u8Down(title, playbackUrl, saveDir string, Thread int) error {
 // getLiveRoomPublicInfo 函数用于获取钉钉直播间的公开信息
 // roomId：直播间ID
 // liveUuid：直播UUID
-func getLiveRoomPublicInfo(roomId, liveUuid, saveDir string, Thread int) error {
+func getLiveRoomPublicInfo(roomId, liveUuid, saveDir string, Thread int, config *Config) error {
 	// 构造URL
 	urlStr := "https://lv.dingtalk.com/getOpenLiveInfo?roomId=" + roomId + "&liveUuid=" + liveUuid
 	urlObj, err := url.Parse(urlStr)
 	if err != nil {
-		return fmt.Errorf("failed to parse URL: %w", err)
+		return fmt.Errorf("URL 解析失败: %w", err)
 	}
 
 	// 创建请求
 	req, err := http.NewRequest("GET", urlObj.String(), nil)
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return fmt.Errorf("创建请求失败: %w", err)
 	}
 
-	// 读取Cookies.json文件
-	jsonCookies, err := os.ReadFile("cookies.json")
+	// 读取Cookies文件
+	jsonCookies, err := os.ReadFile(config.CookiesFile)
 	if err != nil {
-		return fmt.Errorf("failed to read cookies file: %w", err)
+		return fmt.Errorf("读取 Cookies 文件失败: %w", err)
 	}
 
 	var cookies map[string]string
 	if err := json.Unmarshal(jsonCookies, &cookies); err != nil {
-		return fmt.Errorf("failed to unmarshal cookies: %w", err)
+		return fmt.Errorf("解析 Cookies 失败: %w", err)
 	}
 
 	// 添加Cookies到请求
@@ -186,16 +201,17 @@ func getLiveRoomPublicInfo(roomId, liveUuid, saveDir string, Thread int) error {
 	for name, value := range cookies {
 		cookieStr.WriteString(fmt.Sprintf("%s=%s; ", name, value))
 	}
-	cookieHeader := cookieStr.String()
+	// 确保 PC_SESSION 使用 LV_PC_SESSION 的值
 	CookiepcSession, ok := cookies["LV_PC_SESSION"]
 	if !ok {
-		return fmt.Errorf("LV_PC_SESSION cookie not found")
+		return fmt.Errorf("未找到 LV_PC_SESSION Cookie，请重新登录")
 	}
+	cookieStr.WriteString(fmt.Sprintf("PC_SESSION=%s", CookiepcSession))
+	cookieHeader := cookieStr.String()
 
 	// 设置请求头
 	req.Header.Set("Host", "lv.dingtalk.com")
 	req.Header.Set("Cookie", cookieHeader)
-	req.Header.Set("Cookie", "PC_SESSION="+CookiepcSession)
 	req.Header.Set("Sec-Ch-Ua", `"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"`)
 	req.Header.Set("Sec-Ch-Ua-Mobile", "?0")
 	req.Header.Set("Sec-Ch-Ua-Platform", "macOS")
@@ -209,43 +225,42 @@ func getLiveRoomPublicInfo(roomId, liveUuid, saveDir string, Thread int) error {
 	req.Header.Set("Sec-Fetch-Dest", "document")
 	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9")
 
-	// 发送请求
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	// 发送请求（使用全局 HTTP 客户端）
+	resp, err := httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to send request: %w", err)
+		return fmt.Errorf("发送请求失败: %w", err)
 	}
 	defer resp.Body.Close()
 
 	// 读取响应内容
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("failed to read response body: %w", err)
+		return fmt.Errorf("读取响应内容失败: %w", err)
 	}
 
 	var result map[string]interface{}
 	if err := json.Unmarshal(body, &result); err != nil {
-		return fmt.Errorf("failed to unmarshal response: %w", err)
+		return fmt.Errorf("解析响应 JSON 失败: %w", err)
 	}
 
 	// 安全地获取嵌套字段
 	openLiveDetailModel, ok := result["openLiveDetailModel"].(map[string]interface{})
 	if !ok {
-		return fmt.Errorf("invalid response format: openLiveDetailModel not found")
+		return fmt.Errorf("响应格式错误: 未找到 openLiveDetailModel 字段")
 	}
 
 	title, ok := openLiveDetailModel["title"].(string)
 	if !ok {
-		return fmt.Errorf("invalid response format: title not found")
+		return fmt.Errorf("响应格式错误: 未找到 title 字段")
 	}
 
 	playbackUrl, ok := openLiveDetailModel["playbackUrl"].(string)
 	if !ok {
-		return fmt.Errorf("invalid response format: playbackUrl not found")
+		return fmt.Errorf("响应格式错误: 未找到 playbackUrl 字段")
 	}
 
-	fmt.Println("Title:", title)
-	fmt.Println("PlaybackUrl:", playbackUrl)
+	fmt.Println("标题:", title)
+	fmt.Println("回放地址:", playbackUrl)
 
 	return M3u8Down(title, playbackUrl, saveDir, Thread)
 }
@@ -253,7 +268,7 @@ func getLiveRoomPublicInfo(roomId, liveUuid, saveDir string, Thread int) error {
 // processURL 函数接收一个URL字符串作为参数，并解析出其中的roomId和liveUuid参数
 // 然后调用getLiveRoomPublicInfo函数进行处理
 // 如果URL解析出错或缺少roomId或liveUuid参数，则打印错误信息并返回
-func processURL(urlStr, saveDir string, Thread int) error {
+func processURL(urlStr, saveDir string, Thread int, config *Config) error {
 	// 解析 URL
 	parsedURL, err := url.Parse(urlStr)
 	if err != nil {
@@ -268,11 +283,11 @@ func processURL(urlStr, saveDir string, Thread int) error {
 		return fmt.Errorf("URL 中缺少 roomId 或 liveUuid 参数")
 	}
 
-	return getLiveRoomPublicInfo(roomId, liveUuid, saveDir, Thread)
+	return getLiveRoomPublicInfo(roomId, liveUuid, saveDir, Thread, config)
 }
 
 // processURLFromFile 从文件中读取URL进行处理
-func processURLFromFile(filePath, saveDir string, Thread int) error {
+func processURLFromFile(filePath, saveDir string, Thread int, config *Config) error {
 	file, err := os.Open(filePath)
 	if err != nil {
 		return fmt.Errorf("打开文件时出错: %w", err)
@@ -291,7 +306,7 @@ func processURLFromFile(filePath, saveDir string, Thread int) error {
 		}
 
 		fmt.Printf("\n[%d] 处理 URL: %s\n", lineNum, urlStr)
-		if err := processURL(urlStr, saveDir, Thread); err != nil {
+		if err := processURL(urlStr, saveDir, Thread, config); err != nil {
 			errMsg := fmt.Errorf("第 %d 行处理失败: %w", lineNum, err)
 			fmt.Println(errMsg)
 			errors = append(errors, errMsg)
@@ -310,14 +325,14 @@ func processURLFromFile(filePath, saveDir string, Thread int) error {
 }
 
 // checkCookiesValid 检查cookies文件是否存在且有效
-func checkCookiesValid() bool {
+func checkCookiesValid(cookiesFile string) bool {
 	// 检查文件是否存在
-	if _, err := os.Stat("cookies.json"); os.IsNotExist(err) {
+	if _, err := os.Stat(cookiesFile); os.IsNotExist(err) {
 		return false
 	}
 
 	// 尝试读取和解析
-	jsonCookies, err := os.ReadFile("cookies.json")
+	jsonCookies, err := os.ReadFile(cookiesFile)
 	if err != nil {
 		return false
 	}
@@ -350,6 +365,9 @@ func main() {
 		config = DefaultConfig()
 	}
 
+	// 初始化全局 HTTP 客户端
+	initHTTPClient(config.HTTPTimeout)
+
 	// 命令行参数
 	urlFlag := flag.String("url", "", "需要下载的回放URL，格式为 -url \"https://n.dingtalk.com/dingding/live-room/index.html?roomId=XXXX&liveUuid=XXXX\"")
 	urlFile := flag.String("urlFile", "", "包含需要下载的回放URL的文件路径，格式为 -urlFile \"/path/to/file\"")
@@ -376,9 +394,9 @@ func main() {
 	}
 
 	// 检查cookies是否有效，无效则重新登录
-	if !checkCookiesValid() {
+	if !checkCookiesValid(config.CookiesFile) {
 		fmt.Println("Cookies无效或不存在，需要重新登录...")
-		if err := startChrome(); err != nil {
+		if err := startChrome(config); err != nil {
 			fmt.Printf("错误: 获取Cookies失败: %v\n", err)
 			os.Exit(1)
 		}
@@ -388,9 +406,9 @@ func main() {
 
 	// 处理URL
 	if *urlFlag != "" {
-		err = processURL(*urlFlag, *saveDir, *Thread)
+		err = processURL(*urlFlag, *saveDir, *Thread, config)
 	} else if *urlFile != "" {
-		err = processURLFromFile(*urlFile, *saveDir, *Thread)
+		err = processURLFromFile(*urlFile, *saveDir, *Thread, config)
 	}
 
 	if err != nil {

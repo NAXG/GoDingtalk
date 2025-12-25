@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -19,9 +20,9 @@ const (
 	//WriteIntoCacheAndSaveModel 使用缓存下载模式的处理器函数,暂时废弃，因为会占用大量内存，且视频质量不高
 	WriteIntoCacheAndSaveModel = 1
 	SaveAsTsFileAndMergeModel  = 2
-	SuffixMp4                  = ".ts"
-	SuffixTs                   = ".ts"
-	TestDownloadUrl            = ""
+	// SuffixTs 下载文件的后缀（TS 格式，后续通过 ffmpeg 转换为 mp4）
+	SuffixTs        = ".ts"
+	TestDownloadUrl = ""
 )
 
 const (
@@ -137,8 +138,8 @@ type DownloadConfig struct {
 	errCount int
 	// errMutex 保护errCount的互斥锁
 	errMutex sync.Mutex
-	// completeCount 下载完成的数量
-	completeCount int
+	// completeCount 下载完成的数量（使用原子操作保证线程安全）
+	completeCount int64
 	// TotalNum 总共的下载数量
 	TotalNum int
 	// DownloadModel 设置下载模式
@@ -258,10 +259,10 @@ func (md *m3u8downloader) SetNumOfThread(num int) {
 
 // SetMovieName 设置保存后的视频名称
 func (md *m3u8downloader) SetMovieName(videoName string) {
-	if strings.HasSuffix(videoName, SuffixMp4) {
+	if strings.HasSuffix(videoName, SuffixTs) {
 		md.config.VideoName = videoName
 	} else {
-		md.config.VideoName = videoName + SuffixMp4
+		md.config.VideoName = videoName + SuffixTs
 	}
 }
 
@@ -458,8 +459,8 @@ func (md *m3u8downloader) SaveAsTsFileAndMergeEncryption(index, threadId int, bo
 	movie.Write(body)
 	movie.Close()
 	md.buffer[threadId].Reset()
-	md.config.completeCount++
-	md.successChan <- md.config.completeCount
+	count := atomic.AddInt64(&md.config.completeCount, 1)
+	md.successChan <- int(count)
 	//fmt.Println(md.config.completeCount)
 	body = nil
 }
@@ -512,8 +513,8 @@ func (md *m3u8downloader) WriteIntoCacheAndSaveProcessor() {
 func (md *m3u8downloader) WriteIntoCacheAndSave(index, threadId int, body []byte) {
 	md.cacheMap[index] = body
 	md.buffer[threadId].Reset()
-	md.config.completeCount++
-	md.successChan <- md.config.completeCount
+	count := atomic.AddInt64(&md.config.completeCount, 1)
+	md.successChan <- int(count)
 }
 
 // MergeFileInDir 将目标目录下的ts文件全部合并
@@ -524,7 +525,7 @@ func (md *m3u8downloader) MergeFileInDir(path string, saveName string) error {
 	)
 	fileList, err = getAllNonDirectoryFile(path)
 	if err != nil {
-		return nil
+		return err // 修复：正确返回错误而不是 nil
 	}
 	err = mergeFile(path, fileList, saveName)
 	if err != nil {

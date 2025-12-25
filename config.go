@@ -30,11 +30,17 @@ func DefaultConfig() *Config {
 	}
 }
 
-// LoadConfig 从文件加载配置，如果文件不存在则返回默认配置
+// LoadConfig 从文件加载配置，如果文件不存在则创建默认配置文件并返回默认配置
 func LoadConfig(path string) (*Config, error) {
 	// 检查文件是否存在
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return DefaultConfig(), nil
+		// 文件不存在，创建默认配置文件
+		config := DefaultConfig()
+		if saveErr := SaveConfig(path, config); saveErr != nil {
+			// 保存失败不影响程序运行，只是提示
+			return config, nil
+		}
+		return config, nil
 	}
 
 	// 读取配置文件
