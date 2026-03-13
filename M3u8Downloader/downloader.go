@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -268,9 +269,10 @@ func (md *m3u8downloader) SetMovieName(videoName string) {
 
 // SetSaveDirectory 设置下载的视频的保存路径
 func (md *m3u8downloader) SetSaveDirectory(targetDir string) {
+	// 使用 filepath 库确保路径格式正确
 	temp := targetDir
-	if temp[len(temp)-1] != '/' {
-		temp += "/"
+	if !strings.HasSuffix(temp, string(filepath.Separator)) {
+		temp += string(filepath.Separator)
 	}
 	md.config.SaveDirectory = temp
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 )
 
 // Config 配置文件结构
@@ -19,12 +20,35 @@ type Config struct {
 	HTTPTimeout int `json:"http_timeout"`
 }
 
+// getConfigDir 获取配置文件夹路径
+func getConfigDir() (string, error) {
+	exePath, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	exeDir := filepath.Dir(exePath)
+	configDir := filepath.Join(exeDir, ".goDingtalkConfig")
+	
+	// 创建配置文件夹（如果不存在）
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return "", err
+	}
+	
+	return configDir, nil
+}
+
 // DefaultConfig 返回默认配置
 func DefaultConfig() *Config {
+	configDir, err := getConfigDir()
+	if err != nil {
+		// 如果获取配置文件夹失败，使用当前目录
+		configDir = "."
+	}
+	
 	return &Config{
 		ThreadCount:   10,
 		SaveDirectory: "video/",
-		CookiesFile:   "cookies.json",
+		CookiesFile:   filepath.Join(configDir, "cookies.json"),
 		ChromeTimeout: 20,
 		HTTPTimeout:   30,
 	}
@@ -32,6 +56,15 @@ func DefaultConfig() *Config {
 
 // LoadConfig 从文件加载配置，如果文件不存在则创建默认配置文件并返回默认配置
 func LoadConfig(path string) (*Config, error) {
+	// 如果未指定路径，使用配置文件夹中的默认配置文件
+	if path == "" || path == "config.json" {
+		configDir, err := getConfigDir()
+		if err != nil {
+			return nil, err
+		}
+		path = filepath.Join(configDir, "config.json")
+	}
+
 	// 检查文件是否存在
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		// 文件不存在，创建默认配置文件
