@@ -26,9 +26,6 @@ import (
 // 全局HTTP客户端，在 main 中根据配置初始化
 var httpClient *http.Client
 
-// 系统判断
-var _system = runtime.GOOS
-
 
 // initHTTPClient 初始化全局HTTP客户端
 func initHTTPClient(timeout int) {
@@ -104,7 +101,7 @@ func startChrome(config *Config) error {
 				}
 
 				if strings.Contains(currentURL, H5url) {
-					fmt.Println("登录成功, 正在获取Cookies...")
+					fmt.Println("登录成功，正在获取Cookies...")
 					break
 				}
 				time.Sleep(2 * time.Second)
@@ -399,13 +396,14 @@ func main() {
 
 	// 判断系统类型
 	fmt.Printf("当前系统:")
-	if _system == "windows" {
+	switch runtime.GOOS {
+	case "windows":
 		fmt.Println("Windows")
-	} else if _system == "linux" {
+	case "linux":
 		fmt.Println("Linux")
-	} else if _system == "darwin" {
+	case "darwin":
 		fmt.Println("macOS")
-	} else {
+	default:
 		fmt.Println("Others")
 	}
 
@@ -440,10 +438,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 确保保存目录以路径分隔符结尾
-	if !strings.HasSuffix(*saveDir, string(filepath.Separator)) {
-		*saveDir += string(filepath.Separator)
-	}
+	// 规范化保存目录路径
+	*saveDir = filepath.Clean(*saveDir) + string(filepath.Separator)
 
 	// 检查cookies是否有效，无效则重新登录
 	if !checkCookiesValid(config.CookiesFile) {
@@ -466,18 +462,8 @@ func main() {
 	}
 
 	// 处理URL
-	var title string
-	
 	if *urlFlag != "" {
-		title, err = processURL(*urlFlag, *saveDir, *Thread, config, *videoListFile)
-		// 单个URL下载完成后追加标题
-		if err == nil && *videoListFile != "" && title != "" {
-			if appendErr := appendTitleToVideoListFile(*videoListFile, title); appendErr != nil {
-				fmt.Printf("警告: 追加标题到视频列表文件失败: %v\n", appendErr)
-			} else {
-				fmt.Printf("标题已添加到视频列表文件: %s\n", title)
-			}
-		}
+		_, err = processURL(*urlFlag, *saveDir, *Thread, config, *videoListFile)
 	} else if *urlFile != "" {
 		_, err = processURLFromFile(*urlFile, *saveDir, *Thread, config, *videoListFile)
 	}

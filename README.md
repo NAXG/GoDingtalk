@@ -150,9 +150,7 @@ https://n.dingtalk.com/dingding/live-room/index.html?roomId=YYYY&liveUuid=YYYY
 ```
 
 **没有成功下载的情况**：
-```
-# 没有成功下载的视频标题
-```
+文件为空（无内容）
 
 ### 配置文件
 
