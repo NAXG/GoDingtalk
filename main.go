@@ -23,6 +23,9 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
+// Version 程序版本号，通过 -ldflags "-X main.Version=vX.X.X" 注入
+var Version = "dev"
+
 // 全局HTTP客户端，在 main 中根据配置初始化
 var httpClient *http.Client
 
@@ -407,27 +410,56 @@ func main() {
 		fmt.Println("Others")
 	}
 
+	// 命令行参数
+	versionFlag := flag.Bool("version", false, "显示版本号")
+	configFile := flag.String("config", "", "配置文件路径")
+	loginFlag := flag.Bool("login", false, "强制重新登录获取Cookies")
+	urlFlag := flag.String("url", "", "需要下载的回放URL，格式为 -url \"https://n.dingtalk.com/dingding/live-room/index.html?roomId=XXXX&liveUuid=XXXX\"")
+	urlFile := flag.String("urlFile", "", "包含需要下载的回放URL的文件路径，格式为 -urlFile \"/path/to/file\"")
+	Thread := flag.Int("thread", 0, "下载线程数 (默认: 10)")
+	saveDir := flag.String("saveDir", "", "视频保存目录 (默认: video/)")
+	videoListFile := flag.String("videoList", "", "视频列表文件路径，格式为 -videoList \"/path/to/video_list.txt\"")
+	httpTimeout := flag.Int("httpTimeout", 0, "HTTP超时时间，单位秒 (默认: 30)")
+	chromeTimeout := flag.Int("chromeTimeout", 0, "Chrome登录超时时间，单位分钟 (默认: 20)")
+	cookiesFile := flag.String("cookies", "", "Cookies文件路径")
+
+	flag.Parse()
+
+	// 显示版本号
+	if *versionFlag {
+		fmt.Printf("GoDingtalk %s\n", Version)
+		os.Exit(0)
+	}
+
 	// 加载配置文件
-	config, err := LoadConfig("")
+	config, err := LoadConfig(*configFile)
 	if err != nil {
 		fmt.Printf("警告: 加载配置文件失败: %v，使用默认配置\n", err)
 		config = DefaultConfig()
 	}
 
+	// 命令行参数覆盖配置文件
+	if *Thread <= 0 {
+		*Thread = config.ThreadCount
+	}
+	if *saveDir == "" {
+		*saveDir = config.SaveDirectory
+	}
+	if *httpTimeout > 0 {
+		config.HTTPTimeout = *httpTimeout
+	}
+	if *chromeTimeout > 0 {
+		config.ChromeTimeout = *chromeTimeout
+	}
+	if *cookiesFile != "" {
+		config.CookiesFile = *cookiesFile
+	}
+
 	// 初始化全局 HTTP 客户端
 	initHTTPClient(config.HTTPTimeout)
 
-	// 命令行参数
-	urlFlag := flag.String("url", "", "需要下载的回放URL，格式为 -url \"https://n.dingtalk.com/dingding/live-room/index.html?roomId=XXXX&liveUuid=XXXX\"")
-	urlFile := flag.String("urlFile", "", "包含需要下载的回放URL的文件路径，格式为 -urlFile \"/path/to/file\"")
-	Thread := flag.Int("thread", config.ThreadCount, "下载线程数")
-	saveDir := flag.String("saveDir", config.SaveDirectory, "视频保存目录")
-	videoListFile := flag.String("videoList", "", "视频列表文件路径，格式为 -videoList \"/path/to/video_list.txt\"")
-
-	flag.Parse()
-
 	// 参数验证
-	if *urlFlag == "" && *urlFile == "" {
+	if *urlFlag == "" && *urlFile == "" && !*loginFlag {
 		fmt.Println("错误: 未提供 URL 或 URL 文件路径")
 		flag.Usage()
 		os.Exit(1)
@@ -442,14 +474,24 @@ func main() {
 	*saveDir = filepath.Clean(*saveDir) + string(filepath.Separator)
 
 	// 检查cookies是否有效，无效则重新登录
-	if !checkCookiesValid(config.CookiesFile) {
-		fmt.Println("Cookies无效或不存在，需要重新登录...")
+	if *loginFlag || !checkCookiesValid(config.CookiesFile) {
+		if *loginFlag {
+			fmt.Println("强制重新登录...")
+		} else {
+			fmt.Println("Cookies无效或不存在，需要重新登录...")
+		}
 		if err := startChrome(config); err != nil {
 			fmt.Printf("错误: 获取Cookies失败: %v\n", err)
 			os.Exit(1)
 		}
 	} else {
 		fmt.Println("使用现有Cookies...")
+	}
+
+	// 仅登录模式：只登录不下载
+	if *urlFlag == "" && *urlFile == "" {
+		fmt.Println("\n登录完成！")
+		os.Exit(0)
 	}
 
 	// 创建视频列表文件（在下载前创建）
