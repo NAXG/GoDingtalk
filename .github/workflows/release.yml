@@ -1,0 +1,37 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Build binaries
+        run: |
+          VERSION=${GITHUB_REF_NAME}
+          PROJECT_NAME="GoDingtalk"
+          mkdir -p build
+
+          GOOS=windows GOARCH=amd64 go build -ldflags "-w -s" -o build/${PROJECT_NAME}_${VERSION}_windows_amd64.exe
+          GOOS=windows GOARCH=arm64 go build -ldflags "-w -s" -o build/${PROJECT_NAME}_${VERSION}_windows_arm64.exe
+          GOOS=darwin  GOARCH=arm64 go build -ldflags "-w -s" -o build/${PROJECT_NAME}_${VERSION}_darwin_arm64
+          GOOS=darwin  GOARCH=amd64 go build -ldflags "-w -s" -o build/${PROJECT_NAME}_${VERSION}_darwin_amd64
+          GOOS=linux   GOARCH=amd64 go build -ldflags "-w -s" -o build/${PROJECT_NAME}_${VERSION}_linux_amd64
+          GOOS=linux   GOARCH=arm64 go build -ldflags "-w -s" -o build/${PROJECT_NAME}_${VERSION}_linux_arm64
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/*
