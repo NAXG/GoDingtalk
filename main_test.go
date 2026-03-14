@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -20,8 +21,8 @@ func TestDefaultConfig(t *testing.T) {
 		t.Errorf("Default SaveDirectory = %s, want video/", config.SaveDirectory)
 	}
 
-	if config.CookiesFile != "cookies.json" {
-		t.Errorf("Default CookiesFile = %s, want cookies.json", config.CookiesFile)
+	if !strings.HasSuffix(config.CookiesFile, "cookies.json") {
+		t.Errorf("Default CookiesFile = %s, should end with cookies.json", config.CookiesFile)
 	}
 
 	if config.ChromeTimeout != 20 {
@@ -138,44 +139,37 @@ func TestSaveConfig(t *testing.T) {
 }
 
 func TestCheckCookiesValid(t *testing.T) {
-	// 保存当前的 cookies.json（如果存在）
-	var originalCookies []byte
-	var cookiesExisted bool
-	if data, err := os.ReadFile("cookies.json"); err == nil {
-		originalCookies = data
-		cookiesExisted = true
+	// 创建临时目录用于测试
+	tmpDir, err := os.MkdirTemp("", "cookies_test_*")
+	if err != nil {
+		t.Fatal(err)
 	}
-	defer func() {
-		if cookiesExisted {
-			os.WriteFile("cookies.json", originalCookies, 0600)
-		} else {
-			os.Remove("cookies.json")
-		}
-	}()
+	defer os.RemoveAll(tmpDir)
+
+	cookiesFile := tmpDir + "/cookies.json"
 
 	// 测试不存在的 cookies 文件
-	os.Remove("cookies.json")
-	if checkCookiesValid() {
+	if checkCookiesValid(cookiesFile) {
 		t.Errorf("checkCookiesValid() = true for non-existent file, want false")
 	}
 
 	// 测试有效的 cookies 文件
 	validCookies := `{"LV_PC_SESSION": "test_session_value"}`
-	if err := os.WriteFile("cookies.json", []byte(validCookies), 0600); err != nil {
+	if err := os.WriteFile(cookiesFile, []byte(validCookies), 0600); err != nil {
 		t.Fatal(err)
 	}
 
-	if !checkCookiesValid() {
+	if !checkCookiesValid(cookiesFile) {
 		t.Errorf("checkCookiesValid() = false for valid cookies, want true")
 	}
 
 	// 测试无效的 cookies 文件（缺少 LV_PC_SESSION）
 	invalidCookies := `{"OTHER_COOKIE": "value"}`
-	if err := os.WriteFile("cookies.json", []byte(invalidCookies), 0600); err != nil {
+	if err := os.WriteFile(cookiesFile, []byte(invalidCookies), 0600); err != nil {
 		t.Fatal(err)
 	}
 
-	if checkCookiesValid() {
+	if checkCookiesValid(cookiesFile) {
 		t.Errorf("checkCookiesValid() = true for invalid cookies, want false")
 	}
 }
