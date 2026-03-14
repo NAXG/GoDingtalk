@@ -53,6 +53,8 @@ cd GoDingtalk
 ./build.sh
 ```
 
+使用 Windows 系统编译时，需要使用 WSL 或 Git Bash 运行脚本编译，若使用 msys2 编译则会遇到不可预料的问题。
+
 ### 方式二：手动构建
 
 ```bash
@@ -99,8 +101,57 @@ https://n.dingtalk.com/dingding/live-room/index.html?roomId=YYYY&liveUuid=YYYY
 # 指定视频保存目录（默认 video/）
 ./GoDingtalk -url="..." -saveDir="downloads/"
 
-# 组合使用
-./GoDingtalk -urlFile="urls.txt" -thread=15 -saveDir="my_videos/"
+# 创建视频列表文件（记录成功下载的视频标题）
+./GoDingtalk -url="..." -videoList="title.txt"
+
+# 批量下载并创建视频列表
+./GoDingtalk -urlFile="urls.txt" -videoList="all_titles.txt"
+```
+
+### 组合使用
+
+```bash
+./GoDingtalk -urlFile="urls.txt" -thread=15 -saveDir="my_videos/" -videoList="video_list.txt"
+```
+
+### 视频列表功能
+
+`-videoList` 参数可以创建视频列表文件，方便用户查阅已下载的视频标题。
+
+#### 功能特点
+- **单个URL下载**：在指定文件中写入一行下载链接的直播标题
+- **批量URL下载**：在指定文件中写入所有下载链接的直播标题
+- **错误处理**：如果创建文件失败，会显示警告信息但不会中断程序运行
+
+#### 使用示例
+
+**单个URL下载并创建视频列表**：
+```bash
+./GoDingtalk -url="https://n.dingtalk.com/dingding/live-room/index.html?roomId=123&liveUuid=456" -videoList="all_titles.txt"
+```
+
+**批量URL下载并创建视频列表**：
+```bash
+./GoDingtalk -urlFile="urls.txt" -videoList="all_titles.txt"
+```
+
+#### 输出文件格式
+
+**单个URL示例**：
+```
+钉钉直播标题示例1
+```
+
+**批量URL示例**：
+```
+钉钉直播标题示例1
+钉钉直播标题示例2
+钉钉直播标题示例3
+```
+
+**没有成功下载的情况**：
+```
+# 没有成功下载的视频标题
 ```
 
 ### 配置文件
@@ -207,4 +258,3 @@ A: 支持 macOS、Linux 和 Windows。
 ## 许可证
 
 MIT License
-

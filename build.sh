@@ -2,7 +2,7 @@
 
 # 项目名称
 PROJECT_NAME="GoDingtalk"
-VERSION="${1:-v1.0.0}"
+VERSION="${1:-v2.1.1}"
 
 # 创建构建目录
 BUILD_DIR="build"
@@ -15,6 +15,10 @@ echo "=================================="
 # 编译 Windows AMD64
 echo "Building for Windows AMD64..."
 GOOS=windows GOARCH=amd64 go build -ldflags "-w -s" -o ${BUILD_DIR}/${PROJECT_NAME}_${VERSION}_windows_amd64.exe
+
+# 编译 Windows ARM64
+echo "Building for Windows ARM64..."
+GOOS=windows GOARCH=arm64 go build -ldflags "-w -s" -o ${BUILD_DIR}/${PROJECT_NAME}_${VERSION}_windows_arm64.exe
 
 # 编译 macOS ARM64 (Apple Silicon)
 echo "Building for macOS ARM64 (Apple Silicon)..."

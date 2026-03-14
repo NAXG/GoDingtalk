@@ -12,6 +12,8 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -23,6 +25,10 @@ import (
 
 // 全局HTTP客户端，在 main 中根据配置初始化
 var httpClient *http.Client
+
+// 系统判断
+var _system = runtime.GOOS
+
 
 // initHTTPClient 初始化全局HTTP客户端
 func initHTTPClient(timeout int) {
@@ -37,10 +43,10 @@ func initHTTPClient(timeout int) {
 }
 
 // ffmpeg 把ts转换mp4
-func ffmpeg(ts, saveDir string) error {
+func ffmpeg(ts, tempDir, saveDir string) error {
 	fmt.Println("正在转换ts为mp4...")
-	tsPath := saveDir + ts + ".ts"
-	mp4Path := ts + ".mp4"
+	tsPath := filepath.Join(tempDir, ts+".ts")
+	mp4Path := filepath.Join(saveDir, ts+".mp4")
 
 	cmd := exec.Command("ffmpeg", "-i", tsPath, "-c:v", "copy", "-c:a", "copy", "-f", "mp4", "-y", mp4Path)
 	output, err := cmd.CombinedOutput()
@@ -50,13 +56,6 @@ func ffmpeg(ts, saveDir string) error {
 	}
 	fmt.Println(ts + ".mp4 转换完成")
 
-	fmt.Println("正在删除ts文件...")
-	if err := os.Remove(tsPath); err != nil {
-		fmt.Printf("警告: 删除ts文件失败: %v\n", err)
-		// 不返回错误，因为mp4已经生成成功
-	} else {
-		fmt.Println("删除完成")
-	}
 	return nil
 }
 
@@ -105,7 +104,7 @@ func startChrome(config *Config) error {
 				}
 
 				if strings.Contains(currentURL, H5url) {
-					fmt.Println("登录成功，正在获取Cookies...")
+					fmt.Println("登录成功, 正在获取Cookies...")
 					break
 				}
 				time.Sleep(2 * time.Second)
@@ -149,51 +148,71 @@ func startChrome(config *Config) error {
 // title：直播标题
 // playbackUrl：直播回放链接
 // saveDir: 保存目录
+// Thread：线程数
 func M3u8Down(title, playbackUrl, saveDir string, Thread int) error {
+	// 创建临时文件夹
+	tempDir := filepath.Join(saveDir, ".videoTemp")
+
+	if err := os.MkdirAll(tempDir, 0755); err != nil {
+		return fmt.Errorf("创建临时文件夹失败: %w", err)
+	}
+
 	m3u8 := M3u8Downloader.NewDownloader()
 	m3u8.SetUrl(playbackUrl)
 	m3u8.SetMovieName(title)
 	m3u8.SetNumOfThread(Thread)
 	m3u8.SetIfShowTheBar(true)
-	m3u8.SetSaveDirectory(saveDir)
+	m3u8.SetSaveDirectory(tempDir)
 
 	if !m3u8.DefaultDownload() {
+		// 下载失败时清理临时文件夹
+		os.RemoveAll(tempDir)
 		return fmt.Errorf("下载失败")
 	}
 	fmt.Println("下载成功")
 
-	if err := ffmpeg(title, saveDir); err != nil {
+	if err := ffmpeg(title, tempDir, saveDir); err != nil {
+		// 转换失败时清理临时文件夹
+		os.RemoveAll(tempDir)
 		return fmt.Errorf("视频转换失败: %w", err)
 	}
+	
+	// 转换成功后清理临时文件夹
+	if err := os.RemoveAll(tempDir); err != nil {
+		fmt.Printf("警告: 删除临时文件夹失败: %v\n", err)
+	} else {
+		fmt.Println("临时文件夹清理完成")
+	}
+	
 	return nil
 }
 
 // getLiveRoomPublicInfo 函数用于获取钉钉直播间的公开信息
 // roomId：直播间ID
 // liveUuid：直播UUID
-func getLiveRoomPublicInfo(roomId, liveUuid, saveDir string, Thread int, config *Config) error {
+func getLiveRoomPublicInfo(roomId, liveUuid, saveDir string, Thread int, config *Config) (string, error) {
 	// 构造URL
 	urlStr := "https://lv.dingtalk.com/getOpenLiveInfo?roomId=" + roomId + "&liveUuid=" + liveUuid
 	urlObj, err := url.Parse(urlStr)
 	if err != nil {
-		return fmt.Errorf("URL 解析失败: %w", err)
+		return "", fmt.Errorf("URL 解析失败: %w", err)
 	}
 
 	// 创建请求
 	req, err := http.NewRequest("GET", urlObj.String(), nil)
 	if err != nil {
-		return fmt.Errorf("创建请求失败: %w", err)
+		return "", fmt.Errorf("创建请求失败: %w", err)
 	}
 
 	// 读取Cookies文件
 	jsonCookies, err := os.ReadFile(config.CookiesFile)
 	if err != nil {
-		return fmt.Errorf("读取 Cookies 文件失败: %w", err)
+		return "", fmt.Errorf("读取 Cookies 文件失败: %w", err)
 	}
 
 	var cookies map[string]string
 	if err := json.Unmarshal(jsonCookies, &cookies); err != nil {
-		return fmt.Errorf("解析 Cookies 失败: %w", err)
+		return "", fmt.Errorf("解析 Cookies 失败: %w", err)
 	}
 
 	// 添加Cookies到请求
@@ -204,7 +223,7 @@ func getLiveRoomPublicInfo(roomId, liveUuid, saveDir string, Thread int, config 
 	// 确保 PC_SESSION 使用 LV_PC_SESSION 的值
 	CookiepcSession, ok := cookies["LV_PC_SESSION"]
 	if !ok {
-		return fmt.Errorf("未找到 LV_PC_SESSION Cookie，请重新登录")
+		return "", fmt.Errorf("未找到 LV_PC_SESSION Cookie，请重新登录")
 	}
 	cookieStr.WriteString(fmt.Sprintf("PC_SESSION=%s", CookiepcSession))
 	cookieHeader := cookieStr.String()
@@ -228,51 +247,55 @@ func getLiveRoomPublicInfo(roomId, liveUuid, saveDir string, Thread int, config 
 	// 发送请求（使用全局 HTTP 客户端）
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("发送请求失败: %w", err)
+		return "", fmt.Errorf("发送请求失败: %w", err)
 	}
 	defer resp.Body.Close()
 
 	// 读取响应内容
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("读取响应内容失败: %w", err)
+		return "", fmt.Errorf("读取响应内容失败: %w", err)
 	}
 
 	var result map[string]interface{}
 	if err := json.Unmarshal(body, &result); err != nil {
-		return fmt.Errorf("解析响应 JSON 失败: %w", err)
+		return "", fmt.Errorf("解析响应 JSON 失败: %w", err)
 	}
 
 	// 安全地获取嵌套字段
 	openLiveDetailModel, ok := result["openLiveDetailModel"].(map[string]interface{})
 	if !ok {
-		return fmt.Errorf("响应格式错误: 未找到 openLiveDetailModel 字段")
+		return "", fmt.Errorf("响应格式错误: 未找到 openLiveDetailModel 字段")
 	}
 
 	title, ok := openLiveDetailModel["title"].(string)
 	if !ok {
-		return fmt.Errorf("响应格式错误: 未找到 title 字段")
+		return "", fmt.Errorf("响应格式错误: 未找到 title 字段")
 	}
 
 	playbackUrl, ok := openLiveDetailModel["playbackUrl"].(string)
 	if !ok {
-		return fmt.Errorf("响应格式错误: 未找到 playbackUrl 字段")
+		return "", fmt.Errorf("响应格式错误: 未找到 playbackUrl 字段")
 	}
 
 	fmt.Println("标题:", title)
 	fmt.Println("回放地址:", playbackUrl)
 
-	return M3u8Down(title, playbackUrl, saveDir, Thread)
+	if err := M3u8Down(title, playbackUrl, saveDir, Thread); err != nil {
+		return title, err
+	}
+	
+	return title, nil
 }
 
 // processURL 函数接收一个URL字符串作为参数，并解析出其中的roomId和liveUuid参数
 // 然后调用getLiveRoomPublicInfo函数进行处理
 // 如果URL解析出错或缺少roomId或liveUuid参数，则打印错误信息并返回
-func processURL(urlStr, saveDir string, Thread int, config *Config) error {
+func processURL(urlStr, saveDir string, Thread int, config *Config, videoListFile string) (string, error) {
 	// 解析 URL
 	parsedURL, err := url.Parse(urlStr)
 	if err != nil {
-		return fmt.Errorf("解析 URL 时出错: %w", err)
+		return "", fmt.Errorf("解析 URL 时出错: %w", err)
 	}
 
 	// 提取查询参数中的 roomId 和 liveUuid
@@ -280,23 +303,35 @@ func processURL(urlStr, saveDir string, Thread int, config *Config) error {
 	roomId := queryParams.Get("roomId")
 	liveUuid := queryParams.Get("liveUuid")
 	if roomId == "" || liveUuid == "" {
-		return fmt.Errorf("URL 中缺少 roomId 或 liveUuid 参数")
+		return "", fmt.Errorf("URL 中缺少 roomId 或 liveUuid 参数")
 	}
 
-	return getLiveRoomPublicInfo(roomId, liveUuid, saveDir, Thread, config)
+	title, err := getLiveRoomPublicInfo(roomId, liveUuid, saveDir, Thread, config)
+	
+	// 下载完成后立即追加标题到视频列表文件
+	if err == nil && videoListFile != "" && title != "" {
+		if appendErr := appendTitleToVideoListFile(videoListFile, title); appendErr != nil {
+			fmt.Printf("警告: 追加标题到视频列表文件失败: %v\n", appendErr)
+		} else {
+			fmt.Printf("标题已添加到视频列表文件: %s\n", title)
+		}
+	}
+	
+	return title, err
 }
 
 // processURLFromFile 从文件中读取URL进行处理
-func processURLFromFile(filePath, saveDir string, Thread int, config *Config) error {
+func processURLFromFile(filePath, saveDir string, Thread int, config *Config, videoListFile string) ([]string, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
-		return fmt.Errorf("打开文件时出错: %w", err)
+		return nil, fmt.Errorf("打开文件时出错: %w", err)
 	}
 	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
 	lineNum := 0
 	var errors []error
+	var titles []string
 
 	for scanner.Scan() {
 		lineNum++
@@ -306,22 +341,26 @@ func processURLFromFile(filePath, saveDir string, Thread int, config *Config) er
 		}
 
 		fmt.Printf("\n[%d] 处理 URL: %s\n", lineNum, urlStr)
-		if err := processURL(urlStr, saveDir, Thread, config); err != nil {
+		title, err := processURL(urlStr, saveDir, Thread, config, videoListFile)
+		if err != nil {
 			errMsg := fmt.Errorf("第 %d 行处理失败: %w", lineNum, err)
 			fmt.Println(errMsg)
 			errors = append(errors, errMsg)
+		} else {
+			titles = append(titles, title)
+			// 标题已经在 processURL 函数中追加到视频列表文件，这里不需要重复追加
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("读取文件时出错: %w", err)
+		return titles, fmt.Errorf("读取文件时出错: %w", err)
 	}
 
 	if len(errors) > 0 {
-		return fmt.Errorf("批量处理完成，%d 个 URL 处理失败", len(errors))
+		return titles, fmt.Errorf("批量处理完成，%d 个 URL 处理失败", len(errors))
 	}
 
-	return nil
+	return titles, nil
 }
 
 // checkCookiesValid 检查cookies文件是否存在且有效
@@ -358,8 +397,20 @@ func main() {
 	fmt.Println(" |       | |  talk | |  |_|  | |  |_|  | |  |_|  | |  |_|  |")
 	fmt.Println(" |_______| |_______| |_______| |_______| |_______| |_______|")
 
+	// 判断系统类型
+	fmt.Printf("当前系统:")
+	if _system == "windows" {
+		fmt.Println("Windows")
+	} else if _system == "linux" {
+		fmt.Println("Linux")
+	} else if _system == "darwin" {
+		fmt.Println("macOS")
+	} else {
+		fmt.Println("Others")
+	}
+
 	// 加载配置文件
-	config, err := LoadConfig("config.json")
+	config, err := LoadConfig("")
 	if err != nil {
 		fmt.Printf("警告: 加载配置文件失败: %v，使用默认配置\n", err)
 		config = DefaultConfig()
@@ -373,6 +424,7 @@ func main() {
 	urlFile := flag.String("urlFile", "", "包含需要下载的回放URL的文件路径，格式为 -urlFile \"/path/to/file\"")
 	Thread := flag.Int("thread", config.ThreadCount, "下载线程数")
 	saveDir := flag.String("saveDir", config.SaveDirectory, "视频保存目录")
+	videoListFile := flag.String("videoList", "", "视频列表文件路径，格式为 -videoList \"/path/to/video_list.txt\"")
 
 	flag.Parse()
 
@@ -388,9 +440,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 确保保存目录以斜杠结尾
-	if !strings.HasSuffix(*saveDir, "/") {
-		*saveDir += "/"
+	// 确保保存目录以路径分隔符结尾
+	if !strings.HasSuffix(*saveDir, string(filepath.Separator)) {
+		*saveDir += string(filepath.Separator)
 	}
 
 	// 检查cookies是否有效，无效则重新登录
@@ -404,11 +456,30 @@ func main() {
 		fmt.Println("使用现有Cookies...")
 	}
 
+	// 创建视频列表文件（在下载前创建）
+	if *videoListFile != "" {
+		if err := createVideoListFile(*videoListFile); err != nil {
+			fmt.Printf("\n警告: 创建视频列表文件失败: %v\n", err)
+		} else {
+			fmt.Printf("视频列表文件已创建: %s\n", *videoListFile)
+		}
+	}
+
 	// 处理URL
+	var title string
+	
 	if *urlFlag != "" {
-		err = processURL(*urlFlag, *saveDir, *Thread, config)
+		title, err = processURL(*urlFlag, *saveDir, *Thread, config, *videoListFile)
+		// 单个URL下载完成后追加标题
+		if err == nil && *videoListFile != "" && title != "" {
+			if appendErr := appendTitleToVideoListFile(*videoListFile, title); appendErr != nil {
+				fmt.Printf("警告: 追加标题到视频列表文件失败: %v\n", appendErr)
+			} else {
+				fmt.Printf("标题已添加到视频列表文件: %s\n", title)
+			}
+		}
 	} else if *urlFile != "" {
-		err = processURLFromFile(*urlFile, *saveDir, *Thread, config)
+		_, err = processURLFromFile(*urlFile, *saveDir, *Thread, config, *videoListFile)
 	}
 
 	if err != nil {
@@ -417,4 +488,34 @@ func main() {
 	}
 
 	fmt.Println("\n所有任务完成！")
+}
+
+// createVideoListFile 创建视频列表文件（在下载前创建空文件）
+func createVideoListFile(filePath string) error {
+	// 创建或清空文件
+	file, err := os.Create(filePath)
+	if err != nil {
+		return fmt.Errorf("创建文件失败: %w", err)
+	}
+	defer file.Close()
+
+	return nil
+}
+
+// appendTitleToVideoListFile 向视频列表文件追加标题
+func appendTitleToVideoListFile(filePath, title string) error {
+	// 以追加模式打开文件
+	file, err := os.OpenFile(filePath, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("打开文件失败: %w", err)
+	}
+	defer file.Close()
+
+	// 写入标题
+	_, err = file.WriteString(title + "\n")
+	if err != nil {
+		return fmt.Errorf("写入文件失败: %w", err)
+	}
+
+	return nil
 }
