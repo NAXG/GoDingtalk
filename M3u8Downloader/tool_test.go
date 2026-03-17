@@ -114,3 +114,35 @@ func TestGetUnixTimeAndToByte(t *testing.T) {
 		t.Errorf("getUnixTimeAndToByte() = %s; expected at least 10 digits", result)
 	}
 }
+
+func TestMergeFileTruncatesExistingOutput(t *testing.T) {
+	tmpDir := t.TempDir()
+	pathPrefix := tmpDir + string(os.PathSeparator)
+
+	first := filepath.Join(tmpDir, "0000.ts")
+	second := filepath.Join(tmpDir, "0001.ts")
+	output := filepath.Join(tmpDir, "movie.ts")
+
+	if err := os.WriteFile(first, []byte("first"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(second, []byte("second"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(output, []byte("stale-content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := mergeFile(pathPrefix, []string{first, second}, "movie.ts"); err != nil {
+		t.Fatalf("mergeFile() error = %v", err)
+	}
+
+	data, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := string(data); got != "firstsecond" {
+		t.Fatalf("mergeFile() wrote %q, want %q", got, "firstsecond")
+	}
+}

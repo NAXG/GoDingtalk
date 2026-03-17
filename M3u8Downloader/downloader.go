@@ -450,7 +450,7 @@ func (md *m3u8downloader) SaveAsTsFileAndMergeEncryption(index, threadId int, bo
 	md.buffer[threadId].WriteString(md.config.SaveDirectory)
 	md.buffer[threadId].Write(processNum(index))
 	md.suffixList[index] = md.buffer[threadId].String()
-	movie, err := os.OpenFile(md.suffixList[index], os.O_CREATE|os.O_WRONLY, os.ModePerm)
+	movie, err := os.OpenFile(md.suffixList[index], os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.ModePerm)
 	if err != nil {
 		md.config.errMutex.Lock()
 		md.config.errCount += md.config.NumOfThreads
@@ -480,7 +480,7 @@ func (md *m3u8downloader) WriteIntoCacheAndSaveProcessor() {
 	var buffer strings.Builder
 	buffer.WriteString(md.config.SaveDirectory)
 	buffer.WriteString(md.config.VideoName)
-	movie, err := os.OpenFile(buffer.String(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, os.ModePerm)
+	movie, err := os.OpenFile(buffer.String(), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.ModePerm)
 	if err != nil {
 		md.config.errMutex.Lock()
 		md.config.errCount += md.config.NumOfThreads

@@ -8,17 +8,16 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math/rand"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
-	"strings"
-	"strconv"
-	"time"
 	"regexp"
+	"runtime"
+	"strconv"
+	"strings"
+	"time"
 
 	"GoDingtalk/M3u8Downloader"
 
@@ -33,7 +32,7 @@ func isWSLEnvironment() bool {
 	if _, err := os.Stat(wslInteropFile); err == nil {
 		return true
 	}
-	
+
 	// 检测WSL版本文件
 	wslVersionFile := "/proc/version"
 	if content, err := os.ReadFile(wslVersionFile); err == nil {
@@ -41,7 +40,7 @@ func isWSLEnvironment() bool {
 			return true
 		}
 	}
-	
+
 	return false
 }
 
@@ -49,7 +48,7 @@ func isWSLEnvironment() bool {
 func convertWindowsPathToWSL(windowsPath string) string {
 	// 移除Windows路径中的转义反斜杠
 	cleanPath := strings.ReplaceAll(windowsPath, "\\", "/")
-	
+
 	// 匹配Windows驱动器路径（如 C:/Users/...）
 	if len(cleanPath) >= 2 && cleanPath[1] == ':' {
 		driveLetter := strings.ToLower(string(cleanPath[0]))
@@ -57,7 +56,7 @@ func convertWindowsPathToWSL(windowsPath string) string {
 		wslPath := "/mnt/" + driveLetter + cleanPath[2:]
 		return wslPath
 	}
-	
+
 	return cleanPath
 }
 
@@ -72,8 +71,30 @@ func convertWSLPathToWindows(wslPath string) string {
 		windowsPath = strings.ReplaceAll(windowsPath, "/", "\\")
 		return windowsPath
 	}
-	
+
 	return wslPath
+}
+
+func isWindowsPath(path string) bool {
+	return strings.Contains(path, "\\") || (len(path) >= 2 && path[1] == ':')
+}
+
+func isWSLPath(path string) bool {
+	return strings.HasPrefix(path, "/mnt/") && len(path) > len("/mnt/x/")
+}
+
+func normalizePathForRuntime(path string) string {
+	switch runtime.GOOS {
+	case "linux":
+		if isWSLEnvironment() && isWindowsPath(path) {
+			return convertWindowsPathToWSL(path)
+		}
+	case "windows":
+		if isWSLPath(path) {
+			return convertWSLPathToWindows(path)
+		}
+	}
+	return path
 }
 
 // sanitizeFileName 清理文件名中的非法字符，替换为下划线
@@ -82,15 +103,15 @@ func sanitizeFileName(fileName string) string {
 	// 经过测试，只有以下字符会影响文件路径创建：/ \ : * ? " < > |
 	// 空格和反引号不会影响，所以不需要清理
 	reg := regexp.MustCompile(`[\\/:*?"<>|]`)
-	
+
 	// 将非法字符替换为下划线
 	sanitized := reg.ReplaceAllString(fileName, "_")
-	
+
 	// 如果清理后为空字符串，使用默认名称
 	if sanitized == "" {
 		sanitized = "unnamed_video"
 	}
-	
+
 	return sanitized
 }
 
@@ -99,7 +120,6 @@ var Version = "dev"
 
 // 全局HTTP客户端，在 main 中根据配置初始化
 var httpClient *http.Client
-
 
 // initHTTPClient 初始化全局HTTP客户端
 func initHTTPClient(timeout int) {
@@ -116,7 +136,7 @@ func initHTTPClient(timeout int) {
 // ffmpeg 把ts转换mp4
 func ffmpeg(ts, tempDir, saveDir string) error {
 	fmt.Println("正在转换ts为mp4...")
-	
+
 	// 清理文件名中的非法字符
 	sanitizedTs := sanitizeFileName(ts)
 	tsPath := filepath.Join(tempDir, sanitizedTs+".ts")
@@ -128,7 +148,7 @@ func ffmpeg(ts, tempDir, saveDir string) error {
 		fmt.Printf("FFmpeg转换失败: %v\n输出: %s\n", err, string(output))
 		return fmt.Errorf("ffmpeg conversion failed: %w", err)
 	}
-	
+
 	// 使用清理后的文件名输出日志
 	fmt.Println(sanitizedTs + ".mp4 转换完成")
 
@@ -137,38 +157,20 @@ func ffmpeg(ts, tempDir, saveDir string) error {
 
 // generateUniqueTempDir 生成唯一的临时目录名称
 func generateUniqueTempDir(saveDir string) (string, error) {
-	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	const randomLength = 6
-	
-	// 最大尝试次数，避免无限循环
-	maxAttempts := 10
-	
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		// 生成随机字符串
-		randomStr := make([]byte, randomLength)
-		for i := range randomStr {
-			randomStr[i] = charset[rand.Intn(len(charset))]
-		}
-		
-		// 构建目录名称：.videoTemp + 日期 + _ + 随机字符串
-		dateStr := time.Now().Format("20060102")
-		tempDirName := fmt.Sprintf(".videoTemp%s_%s", dateStr, string(randomStr))
-		tempDir := filepath.Join(saveDir, tempDirName)
-		
-		// 检查目录是否已存在
-		if _, err := os.Stat(tempDir); os.IsNotExist(err) {
-			// 目录不存在，创建它
-			if err := os.MkdirAll(tempDir, 0755); err != nil {
-				return "", fmt.Errorf("创建临时目录失败: %w", err)
-			}
-			return tempDir, nil
-		}
-		
-		// 目录已存在，等待一小段时间后重试
-		time.Sleep(100 * time.Millisecond)
+	pattern := fmt.Sprintf(".videoTemp%s_*", time.Now().Format("20060102"))
+	tempDir, err := os.MkdirTemp(saveDir, pattern)
+	if err != nil {
+		return "", fmt.Errorf("创建临时目录失败: %w", err)
 	}
-	
-	return "", fmt.Errorf("无法生成唯一的临时目录名称，尝试次数超过 %d 次", maxAttempts)
+	return tempDir, nil
+}
+
+func cleanupTempDir(tempDir string) {
+	if err := os.RemoveAll(tempDir); err != nil {
+		fmt.Printf("警告: 删除临时文件夹失败: %v\n", err)
+		return
+	}
+	fmt.Println("临时文件夹清理完成")
 }
 
 // startChrome 函数启动Chrome浏览器，访问钉钉登录页面，获取并保存Cookies到本地文件。
@@ -275,35 +277,31 @@ func M3u8Down(title, playbackUrl, saveDir string, Thread int, tempDir string) er
 
 	m3u8 := M3u8Downloader.NewDownloader()
 	m3u8.SetUrl(playbackUrl)
-	
+
 	// 清理文件名中的非法字符，避免文件路径创建失败
 	sanitizedTitle := sanitizeFileName(title)
 	m3u8.SetMovieName(sanitizedTitle)
-	
+
 	m3u8.SetNumOfThread(Thread)
 	m3u8.SetIfShowTheBar(true)
 	m3u8.SetSaveDirectory(tempDir)
 
 	if !m3u8.DefaultDownload() {
-		// 下载失败时清理临时文件夹
-		os.RemoveAll(tempDir)
 		return fmt.Errorf("下载失败")
 	}
 	fmt.Println("下载成功")
 
 	if err := ffmpeg(title, tempDir, saveDir); err != nil {
-		// 转换失败时清理临时文件夹
-		os.RemoveAll(tempDir)
 		return fmt.Errorf("视频转换失败: %w", err)
 	}
-	
+
 	return nil
 }
 
 // getLiveRoomPublicInfo 函数用于获取钉钉直播间的公开信息
 // roomId：直播间ID
 // liveUuid：直播UUID
-func getLiveRoomPublicInfo(roomId, liveUuid, saveDir string, Thread int, config *Config, tempDir string) (string, error) {
+func getLiveRoomPublicInfo(roomId, liveUuid, saveDir string, Thread int, config *Config) (string, error) {
 	// 构造URL
 	urlStr := "https://lv.dingtalk.com/getOpenLiveInfo?roomId=" + roomId + "&liveUuid=" + liveUuid
 	urlObj, err := url.Parse(urlStr)
@@ -399,49 +397,24 @@ func getLiveRoomPublicInfo(roomId, liveUuid, saveDir string, Thread int, config 
 		return "", fmt.Errorf("回放地址为空，可能直播尚未结束或回放不可用")
 	}
 
-	// 单个URL下载时，需要创建临时目录
-	// 批量下载时，tempDir由processURLFromFile提供
-	var actualTempDir string
-	if tempDir == "" {
-		// 单个下载：创建临时目录
-		var err error
-		actualTempDir, err = generateUniqueTempDir(saveDir)
-		if err != nil {
-			return title, fmt.Errorf("创建临时文件夹失败: %w", err)
-		}
-		fmt.Printf("临时文件夹创建成功: %s\n", actualTempDir)
-	} else {
-		// 批量下载：使用提供的临时目录
-		actualTempDir = tempDir
-	}
-
-	// 调用M3u8Down进行下载
-	if err := M3u8Down(title, playbackUrl, saveDir, Thread, actualTempDir); err != nil {
-		// 下载失败时清理临时目录（如果是单个下载）
-		if tempDir == "" {
-			os.RemoveAll(actualTempDir)
-		}
+	tempDir, err := generateUniqueTempDir(saveDir)
+	if err != nil {
 		return title, err
 	}
-	
-	// 单个URL下载时，需要清理临时目录
-	// 批量下载时，tempDir由processURLFromFile提供，会在函数结束时统一清理
-	if tempDir == "" {
-		// 这是单个下载模式，需要清理临时目录
-		if err := os.RemoveAll(actualTempDir); err != nil {
-			fmt.Printf("警告: 删除临时文件夹失败: %v\n", err)
-		} else {
-			fmt.Println("临时文件夹清理完成")
-		}
+	fmt.Printf("临时文件夹创建成功: %s\n", tempDir)
+	defer cleanupTempDir(tempDir)
+
+	if err := M3u8Down(title, playbackUrl, saveDir, Thread, tempDir); err != nil {
+		return title, err
 	}
-	
+
 	return title, nil
 }
 
 // processURL 函数接收一个URL字符串作为参数，并解析出其中的roomId和liveUuid参数
 // 然后调用getLiveRoomPublicInfo函数进行处理
 // 如果URL解析出错或缺少roomId或liveUuid参数，则打印错误信息并返回
-func processURL(urlStr, saveDir string, Thread int, config *Config, videoListFile string, tempDir, fileExt string, processedCount int) (string, error) {
+func processURL(urlStr, saveDir string, Thread int, config *Config, videoListFile, fileExt string, processedCount int) (string, error) {
 	// 解析 URL
 	parsedURL, err := url.Parse(urlStr)
 	if err != nil {
@@ -456,8 +429,8 @@ func processURL(urlStr, saveDir string, Thread int, config *Config, videoListFil
 		return "", fmt.Errorf("URL 中缺少 roomId 或 liveUuid 参数")
 	}
 
-	title, err := getLiveRoomPublicInfo(roomId, liveUuid, saveDir, Thread, config, tempDir)
-	
+	title, err := getLiveRoomPublicInfo(roomId, liveUuid, saveDir, Thread, config)
+
 	// 下载完成后立即追加标题到视频列表文件
 	if err == nil && videoListFile != "" && title != "" {
 		// 清理文件名中的非法字符
@@ -468,27 +441,12 @@ func processURL(urlStr, saveDir string, Thread int, config *Config, videoListFil
 			fmt.Printf("标题已添加到视频列表文件: %s (原始标题: %s)\n", sanitizedTitle, title)
 		}
 	}
-	
+
 	return title, err
 }
 
 // processURLFromFile 从文件中读取URL进行处理
 func processURLFromFile(filePath, saveDir string, Thread int, config *Config, videoListFile, fileExt string) ([]string, error) {
-	// 批量下载时只创建一个临时文件夹
-	tempDir, err := generateUniqueTempDir(saveDir)
-	if err != nil {
-		return nil, fmt.Errorf("创建临时文件夹失败: %w", err)
-	}
-	fmt.Printf("批量下载临时文件夹创建成功: %s\n", tempDir)
-	
-	// 确保在函数结束时清理临时文件夹
-	defer func() {
-		if err := os.RemoveAll(tempDir); err != nil {
-			fmt.Printf("\n警告: 删除临时文件夹失败: %v\n", err)
-		} else {
-			fmt.Println("\n批量下载临时文件夹清理完成")
-		}
-	}()
 	file, err := os.Open(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("打开文件时出错: %w", err)
@@ -510,7 +468,7 @@ func processURLFromFile(filePath, saveDir string, Thread int, config *Config, vi
 
 		processedCount++ // 只有实际处理的URL才递增
 		fmt.Printf("\n[%d] 处理 URL: %s\n", processedCount, urlStr)
-		title, err := processURL(urlStr, saveDir, Thread, config, videoListFile, tempDir, fileExt, processedCount)
+		title, err := processURL(urlStr, saveDir, Thread, config, videoListFile, fileExt, processedCount)
 		if err != nil {
 			errMsg := fmt.Errorf("第 %d 行处理失败: %w", lineNum, err)
 			fmt.Println(errMsg)
@@ -599,59 +557,14 @@ func main() {
 		fmt.Printf("GoDingtalk %s\n", Version)
 		os.Exit(0)
 	}
-	
+
 	// 加载配置文件
 	config, err := LoadConfig(*configFile)
 	if err != nil {
 		fmt.Printf("警告: 加载配置文件失败: %v，使用默认配置\n", err)
 		config = DefaultConfig()
 	}
-	
-	// WSL路径与Windows路径互相转换，方便调试
-	// 检测路径风格是否与当前系统匹配，不匹配时进行转换
-	if runtime.GOOS == "linux" {
-		if isWSLEnvironment() {
-			// 当前是WSL环境，检查配置文件中的路径是否为Windows风格
-			cookiesIsWindowsPath := strings.Contains(config.CookiesFile, "\\") || (len(config.CookiesFile) >= 2 && config.CookiesFile[1] == ':')
-			saveDirIsWindowsPath := strings.Contains(config.SaveDirectory, "\\") || (len(config.SaveDirectory) >= 2 && config.SaveDirectory[1] == ':')
-			
-			if cookiesIsWindowsPath || saveDirIsWindowsPath {
-				fmt.Println("检测到WSL环境，配置文件包含Windows路径，正在转换...")
-				
-				if cookiesIsWindowsPath {
-					originalPath := config.CookiesFile
-					config.CookiesFile = convertWindowsPathToWSL(config.CookiesFile)
-					fmt.Printf("Cookies文件路径已转换: %s → %s\n", originalPath, config.CookiesFile)
-				}
-				
-				if saveDirIsWindowsPath {
-					originalPath := config.SaveDirectory
-					config.SaveDirectory = convertWindowsPathToWSL(config.SaveDirectory)
-					fmt.Printf("保存目录路径已转换: %s → %s\n", originalPath, config.SaveDirectory)
-				}
-			}
-		}
-	} else if runtime.GOOS == "windows" {
-		// 当前是Windows环境，检查配置文件中的路径是否为WSL风格
-		cookiesIsWSLPath := strings.HasPrefix(config.CookiesFile, "/mnt/")
-		saveDirIsWSLPath := strings.HasPrefix(config.SaveDirectory, "/mnt/")
-		
-		if cookiesIsWSLPath || saveDirIsWSLPath {
-			fmt.Println("检测到Windows环境，配置文件包含WSL路径，正在转换...")
-			
-			if cookiesIsWSLPath {
-				originalPath := config.CookiesFile
-				config.CookiesFile = convertWSLPathToWindows(config.CookiesFile)
-				fmt.Printf("Cookies文件路径已转换: %s → %s\n", originalPath, config.CookiesFile)
-			}
-			
-			if saveDirIsWSLPath {
-				originalPath := config.SaveDirectory
-				config.SaveDirectory = convertWSLPathToWindows(config.SaveDirectory)
-				fmt.Printf("保存目录路径已转换: %s → %s\n", originalPath, config.SaveDirectory)
-			}
-		}
-	}
+
 	// 命令行参数覆盖配置文件
 	if *Thread <= 0 {
 		*Thread = config.ThreadCount
@@ -668,7 +581,19 @@ func main() {
 	if *cookiesFile != "" {
 		config.CookiesFile = *cookiesFile
 	}
-	
+
+	normalizedCookies := normalizePathForRuntime(config.CookiesFile)
+	if normalizedCookies != config.CookiesFile {
+		fmt.Printf("Cookies文件路径已转换: %s → %s\n", config.CookiesFile, normalizedCookies)
+		config.CookiesFile = normalizedCookies
+	}
+
+	normalizedSaveDir := normalizePathForRuntime(*saveDir)
+	if normalizedSaveDir != *saveDir {
+		fmt.Printf("保存目录路径已转换: %s → %s\n", *saveDir, normalizedSaveDir)
+		*saveDir = normalizedSaveDir
+	}
+
 	// 初始化全局 HTTP 客户端
 	initHTTPClient(config.HTTPTimeout)
 
@@ -721,7 +646,7 @@ func main() {
 
 	// 处理URL
 	if *urlFlag != "" {
-		_, err = processURL(*urlFlag, *saveDir, *Thread, config, *videoListFile, "", fileExt, 1)
+		_, err = processURL(*urlFlag, *saveDir, *Thread, config, *videoListFile, fileExt, 1)
 	} else if *urlFile != "" {
 		_, err = processURLFromFile(*urlFile, *saveDir, *Thread, config, *videoListFile, fileExt)
 	}
@@ -738,26 +663,23 @@ func main() {
 func createVideoListFile(filePath string, fileExt string) error {
 	// 创建或清空文件
 	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
-
-	defer file.Close()
-
 	if err != nil {
 		return fmt.Errorf("创建文件失败: %w", err)
 	}
+	defer file.Close()
+
 	fileHeader := ""
 	fmt.Printf("检测到%s文件，正在创建视频列表\n", fileExt)
 	switch fileExt {
-		case ".txt":
-			fileHeader = ""
-		case ".m3u":
-			fileHeader = "#EXTM3U\n"
-		case ".m3u8":
-			fileHeader = "#EXTM3U8\n"
-		case ".dpl":
-			fileHeader = "DAUMPLAYLIST\nplayname=\ntopindex=0\nsaveplaypos=0\n"
-		default:
-			fileHeader = ""
-			fmt.Printf("警告：未知的文件扩展名%s，将按.txt文件格式进行处理\n", fileExt)
+	case ".txt":
+		fileHeader = ""
+	case ".m3u", ".m3u8":
+		fileHeader = "#EXTM3U\n"
+	case ".dpl":
+		fileHeader = "DAUMPLAYLIST\nplayname=\ntopindex=0\nsaveplaypos=0\n"
+	default:
+		fileHeader = ""
+		fmt.Printf("警告：未知的文件扩展名%s，将按.txt文件格式进行处理\n", fileExt)
 	}
 
 	_, err = file.WriteString(fileHeader)
@@ -777,25 +699,21 @@ func appendTitleToVideoListFile(filePath, title, fileExt string, processedCount 
 	}
 	defer file.Close()
 
-	// 计算视频列表文件相对于视频保存目录的相对路径
-	relPath, err := filepath.Rel(filepath.Dir(filePath), saveDir)
+	videoPath := filepath.Join(saveDir, title+".mp4")
+	relPath, err := filepath.Rel(filepath.Dir(filePath), videoPath)
 	if err != nil {
 		return fmt.Errorf("计算相对路径失败: %w", err)
 	}
 
-	// 写入标题
-	// 根据文件扩展名添加标题格式
 	switch fileExt {
-		case ".txt":
-			_, err = file.WriteString(title + "\n")
-		case ".m3u":
-			_, err = file.WriteString(filepath.Join(relPath, title+".mp4") + "\n")
-		case ".m3u8":
-			_, err = file.WriteString(filepath.Join(relPath, title+".mp4") + "\n")
-		case ".dpl":
-			_, err = file.WriteString(strconv.Itoa(processedCount) + "*file*" + filepath.Join(relPath, title+".mp4") + "\n")
-		default:
-			_, err = file.WriteString(title + "\n")
+	case ".txt":
+		_, err = file.WriteString(title + "\n")
+	case ".m3u", ".m3u8":
+		_, err = file.WriteString(filepath.ToSlash(relPath) + "\n")
+	case ".dpl":
+		_, err = file.WriteString(strconv.Itoa(processedCount) + "*file*" + relPath + "\n")
+	default:
+		_, err = file.WriteString(title + "\n")
 	}
 	if err != nil {
 		return fmt.Errorf("写入文件失败: %w", err)

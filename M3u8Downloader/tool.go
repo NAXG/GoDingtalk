@@ -78,7 +78,7 @@ func mergeFile(path string, fileList []string, saveName string) error {
 	)
 	buffer.WriteString(path)
 	buffer.WriteString(saveName)
-	movie, err = os.OpenFile(buffer.String(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, os.ModePerm)
+	movie, err = os.OpenFile(buffer.String(), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.ModePerm)
 	if err != nil {
 		return err
 	}

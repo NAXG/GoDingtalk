@@ -1,6 +1,8 @@
 package M3u8Downloader
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -115,5 +117,30 @@ func TestNewDownloader(t *testing.T) {
 
 	if md.config.DownloadModel != SaveAsTsFileAndMergeModel {
 		t.Errorf("Default DownloadModel = %d, want %d", md.config.DownloadModel, SaveAsTsFileAndMergeModel)
+	}
+}
+
+func TestSaveAsTsFileAndMergeEncryptionTruncatesExistingSegment(t *testing.T) {
+	tmpDir := t.TempDir()
+	downloader := NewDownloader().(*m3u8downloader)
+	downloader.SetSaveDirectory(tmpDir)
+	downloader.SetNumOfThread(1)
+	downloader.successChan = make(IntChannel, 1)
+	downloader.suffixList = make([]string, 1)
+
+	segmentPath := filepath.Join(tmpDir, "0000.ts")
+	if err := os.WriteFile(segmentPath, []byte("stale-segment-content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	downloader.SaveAsTsFileAndMergeEncryption(0, 0, []byte("new"))
+
+	data, err := os.ReadFile(segmentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := string(data); got != "new" {
+		t.Fatalf("SaveAsTsFileAndMergeEncryption() wrote %q, want %q", got, "new")
 	}
 }

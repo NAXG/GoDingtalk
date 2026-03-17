@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -171,5 +172,99 @@ func TestCheckCookiesValid(t *testing.T) {
 
 	if checkCookiesValid(cookiesFile) {
 		t.Errorf("checkCookiesValid() = true for invalid cookies, want false")
+	}
+}
+
+func TestSanitizeFileName(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{name: "keeps valid chars", input: "lesson 01", expected: "lesson 01"},
+		{name: "replaces invalid chars", input: `a/b\c:d*e?f"g<h>i|j`, expected: "a_b_c_d_e_f_g_h_i_j"},
+		{name: "empty fallback", input: "", expected: "unnamed_video"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sanitizeFileName(tt.input); got != tt.expected {
+				t.Fatalf("sanitizeFileName(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestCreateVideoListFile(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	tests := []struct {
+		name     string
+		fileName string
+		fileExt  string
+		expected string
+	}{
+		{name: "txt", fileName: "video.txt", fileExt: ".txt", expected: ""},
+		{name: "m3u", fileName: "video.m3u", fileExt: ".m3u", expected: "#EXTM3U\n"},
+		{name: "m3u8", fileName: "video.m3u8", fileExt: ".m3u8", expected: "#EXTM3U\n"},
+		{name: "dpl", fileName: "video.dpl", fileExt: ".dpl", expected: "DAUMPLAYLIST\nplayname=\ntopindex=0\nsaveplaypos=0\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(tmpDir, tt.fileName)
+			if err := createVideoListFile(path, tt.fileExt); err != nil {
+				t.Fatalf("createVideoListFile() error = %v", err)
+			}
+
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("ReadFile() error = %v", err)
+			}
+
+			if got := string(data); got != tt.expected {
+				t.Fatalf("createVideoListFile() wrote %q, want %q", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestCreateVideoListFileReturnsErrorForMissingParent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing", "video.m3u8")
+
+	if err := createVideoListFile(path, ".m3u8"); err == nil {
+		t.Fatal("createVideoListFile() error = nil, want non-nil")
+	}
+}
+
+func TestAppendTitleToVideoListFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	listDir := filepath.Join(tmpDir, "lists")
+	saveDir := filepath.Join(tmpDir, "videos")
+
+	if err := os.MkdirAll(listDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(saveDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	listPath := filepath.Join(listDir, "video.m3u8")
+	if err := createVideoListFile(listPath, ".m3u8"); err != nil {
+		t.Fatalf("createVideoListFile() error = %v", err)
+	}
+
+	if err := appendTitleToVideoListFile(listPath, "lesson", ".m3u8", 1, saveDir); err != nil {
+		t.Fatalf("appendTitleToVideoListFile() error = %v", err)
+	}
+
+	data, err := os.ReadFile(listPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	expected := "#EXTM3U\n../videos/lesson.mp4\n"
+	if got := string(data); got != expected {
+		t.Fatalf("appendTitleToVideoListFile() wrote %q, want %q", got, expected)
 	}
 }
