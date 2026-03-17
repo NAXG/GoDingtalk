@@ -307,7 +307,7 @@ func (md *m3u8downloader) showTheBar() {
 
 }
 
-// reFind 倒叙查找
+// reFind 倒序查找
 func reFind(startIndex int, str []byte) int {
 	var i int
 	for i = startIndex; str[i] != '/'; i-- {
