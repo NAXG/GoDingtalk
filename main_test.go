@@ -1,11 +1,63 @@
 package main
 
 import (
+	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"GoDingtalk/M3u8Downloader"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+type fakeDownloader struct {
+	url             string
+	movieName       string
+	threadNum       int
+	showBar         bool
+	saveDir         string
+	defaultDownload bool
+}
+
+func (f *fakeDownloader) DefaultDownload() bool { return f.defaultDownload }
+func (f *fakeDownloader) ParseM3u8FileEncrypted(link string) (*M3u8Downloader.Result, error) {
+	return nil, nil
+}
+func (f *fakeDownloader) Download() error                                         { return nil }
+func (f *fakeDownloader) SetUrl(url string)                                       { f.url = url }
+func (f *fakeDownloader) SetIfShowTheBar(ifShow bool)                             { f.showBar = ifShow }
+func (f *fakeDownloader) SetNumOfThread(num int)                                  { f.threadNum = num }
+func (f *fakeDownloader) SetMovieName(videoName string)                           { f.movieName = videoName }
+func (f *fakeDownloader) SetSaveDirectory(targetDir string)                       { f.saveDir = targetDir }
+func (f *fakeDownloader) SetDownloadModel(model M3u8Downloader.DownloadModelType) {}
+func (f *fakeDownloader) MergeFile() error                                        { return nil }
+func (f *fakeDownloader) MergeFileInDir(path string, saveName string) error       { return nil }
+
+func jsonHTTPResponse(body string) *http.Response {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+}
+
+func writeCookiesFile(t *testing.T, dir string) string {
+	t.Helper()
+	path := filepath.Join(dir, "cookies.json")
+	if err := os.WriteFile(path, []byte(`{"LV_PC_SESSION":"session-token","foo":"bar"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
 
 func TestDefaultConfig(t *testing.T) {
 	config := DefaultConfig()
@@ -91,6 +143,57 @@ func TestLoadConfig(t *testing.T) {
 
 	if config.HTTPTimeout != 60 {
 		t.Errorf("LoadConfig() HTTPTimeout = %d, want 60", config.HTTPTimeout)
+	}
+}
+
+func TestLoadConfigInvalidJSON(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "config_invalid_*.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+
+	if _, err := tmpFile.WriteString(`{"thread_count":`); err != nil {
+		t.Fatal(err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := LoadConfig(tmpPath); err == nil {
+		t.Fatal("LoadConfig() error = nil, want non-nil for invalid JSON")
+	}
+}
+
+func TestLoadConfigPartialUsesDefaults(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "config_partial_*.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+
+	if _, err := tmpFile.WriteString(`{"thread_count":12}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	config, err := LoadConfig(tmpPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+
+	if config.ThreadCount != 12 {
+		t.Fatalf("LoadConfig() ThreadCount = %d, want 12", config.ThreadCount)
+	}
+	if config.SaveDirectory != "video/" {
+		t.Fatalf("LoadConfig() SaveDirectory = %q, want %q", config.SaveDirectory, "video/")
+	}
+	if config.ChromeTimeout != 20 || config.HTTPTimeout != 30 {
+		t.Fatalf("LoadConfig() defaults not preserved: %+v", config)
 	}
 }
 
@@ -267,4 +370,418 @@ func TestAppendTitleToVideoListFile(t *testing.T) {
 	if got := string(data); got != expected {
 		t.Fatalf("appendTitleToVideoListFile() wrote %q, want %q", got, expected)
 	}
+}
+
+func TestAppendTitleToVideoListFileFormats(t *testing.T) {
+	tmpDir := t.TempDir()
+	listDir := filepath.Join(tmpDir, "lists")
+	saveDir := filepath.Join(tmpDir, "videos")
+
+	if err := os.MkdirAll(listDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(saveDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name     string
+		fileName string
+		fileExt  string
+		want     string
+	}{
+		{name: "txt", fileName: "video.txt", fileExt: ".txt", want: "lesson\n"},
+		{name: "dpl", fileName: "video.dpl", fileExt: ".dpl", want: "3*file*../videos/lesson.mp4\n"},
+		{name: "fallback", fileName: "video.unknown", fileExt: ".unknown", want: "lesson\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			listPath := filepath.Join(listDir, tt.fileName)
+			if err := os.WriteFile(listPath, nil, 0644); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := appendTitleToVideoListFile(listPath, "lesson", tt.fileExt, 3, saveDir); err != nil {
+				t.Fatalf("appendTitleToVideoListFile() error = %v", err)
+			}
+
+			data, err := os.ReadFile(listPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := string(data); got != tt.want {
+				t.Fatalf("appendTitleToVideoListFile() wrote %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGenerateUniqueTempDirAndCleanup(t *testing.T) {
+	tmpDir := t.TempDir()
+	tempDir, err := generateUniqueTempDir(tmpDir)
+	if err != nil {
+		t.Fatalf("generateUniqueTempDir() error = %v", err)
+	}
+
+	info, err := os.Stat(tempDir)
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatal("generateUniqueTempDir() did not create a directory")
+	}
+
+	cleanupTempDir(tempDir)
+	if _, err := os.Stat(tempDir); !os.IsNotExist(err) {
+		t.Fatalf("cleanupTempDir() did not remove %s", tempDir)
+	}
+}
+
+func TestPathHelpers(t *testing.T) {
+	if got := convertWindowsPathToWSL(`C:\Users\demo\file.txt`); got != "/mnt/c/Users/demo/file.txt" {
+		t.Fatalf("convertWindowsPathToWSL() = %q", got)
+	}
+	if got := convertWSLPathToWindows("/mnt/d/work/file.txt"); got != `D:\work\file.txt` {
+		t.Fatalf("convertWSLPathToWindows() = %q", got)
+	}
+	if !isWSLPath("/mnt/e/data/cookies.json") {
+		t.Fatal("isWSLPath() = false, want true")
+	}
+	if isWSLPath("/tmp/cookies.json") {
+		t.Fatal("isWSLPath() = true, want false")
+	}
+	if got := normalizePathForTarget(`E:\data\cookies.json`, "linux", true); got != "/mnt/e/data/cookies.json" {
+		t.Fatalf("normalizePathForTarget() = %q", got)
+	}
+	if got := normalizePathForTarget("/mnt/d/work/file.txt", "windows", false); got != `D:\work\file.txt` {
+		t.Fatalf("normalizePathForTarget() = %q", got)
+	}
+	if got := normalizePathForTarget("/tmp/file.txt", "linux", false); got != "/tmp/file.txt" {
+		t.Fatalf("normalizePathForTarget() unexpectedly rewrote %q", got)
+	}
+}
+
+func TestInitHTTPClient(t *testing.T) {
+	originalHTTPClient := httpClient
+	t.Cleanup(func() {
+		httpClient = originalHTTPClient
+	})
+
+	initHTTPClient(42)
+
+	if httpClient == nil {
+		t.Fatal("initHTTPClient() left httpClient nil")
+	}
+	if httpClient.Timeout != 42*time.Second {
+		t.Fatalf("httpClient.Timeout = %v, want %v", httpClient.Timeout, 42*time.Second)
+	}
+	if httpClient.Transport == nil {
+		t.Fatal("initHTTPClient() left Transport nil")
+	}
+}
+
+func TestFFmpegError(t *testing.T) {
+	oldPath := os.Getenv("PATH")
+	if err := os.Setenv("PATH", t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Setenv("PATH", oldPath)
+	})
+
+	tempDir := t.TempDir()
+	saveDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tempDir, "video.ts"), []byte("dummy"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ffmpeg("video", tempDir, saveDir); err == nil {
+		t.Fatal("ffmpeg() error = nil, want non-nil")
+	}
+}
+
+func TestM3u8Down(t *testing.T) {
+	originalNewDownloader := newDownloader
+	originalFFmpeg := ffmpegFunc
+	t.Cleanup(func() {
+		newDownloader = originalNewDownloader
+		ffmpegFunc = originalFFmpeg
+	})
+
+	t.Run("requires temp dir", func(t *testing.T) {
+		if err := M3u8Down("title", "https://example.com/video.m3u8", t.TempDir(), 2, ""); err == nil {
+			t.Fatal("M3u8Down() error = nil, want non-nil")
+		}
+	})
+
+	t.Run("success", func(t *testing.T) {
+		fd := &fakeDownloader{defaultDownload: true}
+		newDownloader = func() M3u8Downloader.M3u8Downloader { return fd }
+
+		var ffmpegArgs []string
+		ffmpegFunc = func(ts, tempDir, saveDir string) error {
+			ffmpegArgs = []string{ts, tempDir, saveDir}
+			return nil
+		}
+
+		tempDir := t.TempDir()
+		saveDir := t.TempDir()
+		err := M3u8Down(`bad:/title`, "https://example.com/video.m3u8", saveDir, 4, tempDir)
+		if err != nil {
+			t.Fatalf("M3u8Down() error = %v", err)
+		}
+		if fd.url != "https://example.com/video.m3u8" {
+			t.Fatalf("SetUrl got %q", fd.url)
+		}
+		if fd.movieName != "bad__title" {
+			t.Fatalf("SetMovieName got %q", fd.movieName)
+		}
+		if fd.threadNum != 4 || !fd.showBar || fd.saveDir != tempDir {
+			t.Fatalf("downloader config not propagated: %+v", fd)
+		}
+		if strings.Join(ffmpegArgs, "|") != strings.Join([]string{`bad:/title`, tempDir, saveDir}, "|") {
+			t.Fatalf("ffmpeg args = %v", ffmpegArgs)
+		}
+	})
+
+	t.Run("download failure", func(t *testing.T) {
+		newDownloader = func() M3u8Downloader.M3u8Downloader { return &fakeDownloader{defaultDownload: false} }
+		ffmpegCalled := false
+		ffmpegFunc = func(ts, tempDir, saveDir string) error {
+			ffmpegCalled = true
+			return nil
+		}
+
+		err := M3u8Down("title", "https://example.com/video.m3u8", t.TempDir(), 1, t.TempDir())
+		if err == nil {
+			t.Fatal("M3u8Down() error = nil, want non-nil")
+		}
+		if ffmpegCalled {
+			t.Fatal("ffmpeg should not be called after download failure")
+		}
+	})
+}
+
+func TestGetLiveRoomPublicInfo(t *testing.T) {
+	originalHTTPClient := httpClient
+	originalNewDownloader := newDownloader
+	originalFFmpeg := ffmpegFunc
+	originalTempDirFactory := tempDirFactory
+	originalTempDirCleanup := tempDirCleanup
+	t.Cleanup(func() {
+		httpClient = originalHTTPClient
+		newDownloader = originalNewDownloader
+		ffmpegFunc = originalFFmpeg
+		tempDirFactory = originalTempDirFactory
+		tempDirCleanup = originalTempDirCleanup
+	})
+
+	tmpDir := t.TempDir()
+	cookiesFile := writeCookiesFile(t, tmpDir)
+	config := &Config{CookiesFile: cookiesFile}
+
+	t.Run("success", func(t *testing.T) {
+		httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.Header.Get("Cookie") == "" {
+				t.Fatal("expected Cookie header to be set")
+			}
+			return jsonHTTPResponse(`{"openLiveDetailModel":{"title":"demo:title","playbackUrl":"https://example.com/media.m3u8"}}`), nil
+		})}
+
+		fd := &fakeDownloader{defaultDownload: true}
+		newDownloader = func() M3u8Downloader.M3u8Downloader { return fd }
+		ffmpegFunc = func(ts, tempDir, saveDir string) error { return nil }
+
+		var createdTempDir string
+		tempDirFactory = func(saveDir string) (string, error) {
+			dir, err := os.MkdirTemp(saveDir, "room-*")
+			if err == nil {
+				createdTempDir = dir
+			}
+			return dir, err
+		}
+		tempDirCleanup = cleanupTempDir
+
+		title, err := getLiveRoomPublicInfo("room", "uuid", tmpDir, 2, config)
+		if err != nil {
+			t.Fatalf("getLiveRoomPublicInfo() error = %v", err)
+		}
+		if title != "demo:title" {
+			t.Fatalf("title = %q, want %q", title, "demo:title")
+		}
+		if _, err := os.Stat(createdTempDir); !os.IsNotExist(err) {
+			t.Fatalf("temp dir %q should be removed", createdTempDir)
+		}
+	})
+
+	t.Run("empty playback url", func(t *testing.T) {
+		httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return jsonHTTPResponse(`{"openLiveDetailModel":{"title":"demo","playbackUrl":""}}`), nil
+		})}
+
+		if _, err := getLiveRoomPublicInfo("room", "uuid", tmpDir, 2, config); err == nil {
+			t.Fatal("getLiveRoomPublicInfo() error = nil, want non-nil")
+		}
+	})
+
+	t.Run("missing LV_PC_SESSION", func(t *testing.T) {
+		badCookies := filepath.Join(tmpDir, "missing-session.json")
+		if err := os.WriteFile(badCookies, []byte(`{"foo":"bar"}`), 0600); err != nil {
+			t.Fatal(err)
+		}
+
+		if _, err := getLiveRoomPublicInfo("room", "uuid", tmpDir, 2, &Config{CookiesFile: badCookies}); err == nil {
+			t.Fatal("getLiveRoomPublicInfo() error = nil, want non-nil")
+		}
+	})
+
+	t.Run("invalid response json", func(t *testing.T) {
+		httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return jsonHTTPResponse(`not-json`), nil
+		})}
+
+		if _, err := getLiveRoomPublicInfo("room", "uuid", tmpDir, 2, config); err == nil {
+			t.Fatal("getLiveRoomPublicInfo() error = nil, want non-nil")
+		}
+	})
+
+	t.Run("missing detail model", func(t *testing.T) {
+		httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return jsonHTTPResponse(`{"other":"value"}`), nil
+		})}
+
+		if _, err := getLiveRoomPublicInfo("room", "uuid", tmpDir, 2, config); err == nil {
+			t.Fatal("getLiveRoomPublicInfo() error = nil, want non-nil")
+		}
+	})
+}
+
+func TestProcessURL(t *testing.T) {
+	originalHTTPClient := httpClient
+	originalNewDownloader := newDownloader
+	originalFFmpeg := ffmpegFunc
+	originalTempDirFactory := tempDirFactory
+	originalTempDirCleanup := tempDirCleanup
+	t.Cleanup(func() {
+		httpClient = originalHTTPClient
+		newDownloader = originalNewDownloader
+		ffmpegFunc = originalFFmpeg
+		tempDirFactory = originalTempDirFactory
+		tempDirCleanup = originalTempDirCleanup
+	})
+
+	tmpDir := t.TempDir()
+	saveDir := filepath.Join(tmpDir, "videos")
+	if err := os.MkdirAll(saveDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	config := &Config{CookiesFile: writeCookiesFile(t, tmpDir)}
+	httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return jsonHTTPResponse(`{"openLiveDetailModel":{"title":"lesson:1","playbackUrl":"https://example.com/media.m3u8"}}`), nil
+	})}
+	newDownloader = func() M3u8Downloader.M3u8Downloader { return &fakeDownloader{defaultDownload: true} }
+	ffmpegFunc = func(ts, tempDir, saveDir string) error { return nil }
+	tempDirFactory = func(saveDir string) (string, error) { return os.MkdirTemp(saveDir, "proc-*") }
+	tempDirCleanup = func(tempDir string) { _ = os.RemoveAll(tempDir) }
+
+	t.Run("success appends title", func(t *testing.T) {
+		listPath := filepath.Join(tmpDir, "videos.m3u8")
+		if err := createVideoListFile(listPath, ".m3u8"); err != nil {
+			t.Fatal(err)
+		}
+
+		title, err := processURL("https://example.com/?roomId=1&liveUuid=2", saveDir, 3, config, listPath, ".m3u8", 1)
+		if err != nil {
+			t.Fatalf("processURL() error = %v", err)
+		}
+		if title != "lesson:1" {
+			t.Fatalf("title = %q", title)
+		}
+
+		data, err := os.ReadFile(listPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := string(data); got != "#EXTM3U\nvideos/lesson_1.mp4\n" {
+			t.Fatalf("video list = %q", got)
+		}
+	})
+
+	t.Run("missing query params", func(t *testing.T) {
+		if _, err := processURL("https://example.com/?roomId=1", saveDir, 3, config, "", "", 1); err == nil {
+			t.Fatal("processURL() error = nil, want non-nil")
+		}
+	})
+}
+
+func TestProcessURLFromFile(t *testing.T) {
+	originalHTTPClient := httpClient
+	originalNewDownloader := newDownloader
+	originalFFmpeg := ffmpegFunc
+	originalTempDirFactory := tempDirFactory
+	originalTempDirCleanup := tempDirCleanup
+	t.Cleanup(func() {
+		httpClient = originalHTTPClient
+		newDownloader = originalNewDownloader
+		ffmpegFunc = originalFFmpeg
+		tempDirFactory = originalTempDirFactory
+		tempDirCleanup = originalTempDirCleanup
+	})
+
+	tmpDir := t.TempDir()
+	saveDir := filepath.Join(tmpDir, "videos")
+	if err := os.MkdirAll(saveDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	config := &Config{CookiesFile: writeCookiesFile(t, tmpDir)}
+	newDownloader = func() M3u8Downloader.M3u8Downloader { return &fakeDownloader{defaultDownload: true} }
+	ffmpegFunc = func(ts, tempDir, saveDir string) error { return nil }
+	tempDirFactory = func(saveDir string) (string, error) { return os.MkdirTemp(saveDir, "batch-*") }
+	tempDirCleanup = func(tempDir string) { _ = os.RemoveAll(tempDir) }
+
+	httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		roomID := req.URL.Query().Get("roomId")
+		return jsonHTTPResponse(fmt.Sprintf(`{"openLiveDetailModel":{"title":"title-%s","playbackUrl":"https://example.com/%s.m3u8"}}`, roomID, roomID)), nil
+	})}
+
+	t.Run("success", func(t *testing.T) {
+		urlFile := filepath.Join(tmpDir, "urls.txt")
+		content := strings.Join([]string{
+			"# comment",
+			"",
+			"https://example.com/?roomId=one&liveUuid=u1",
+			"https://example.com/?roomId=two&liveUuid=u2",
+		}, "\n")
+		if err := os.WriteFile(urlFile, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		titles, err := processURLFromFile(urlFile, saveDir, 2, config, "", "")
+		if err != nil {
+			t.Fatalf("processURLFromFile() error = %v", err)
+		}
+		if got := strings.Join(titles, ","); got != "title-one,title-two" {
+			t.Fatalf("titles = %q", got)
+		}
+	})
+
+	t.Run("partial failure", func(t *testing.T) {
+		urlFile := filepath.Join(tmpDir, "urls-invalid.txt")
+		content := strings.Join([]string{
+			"https://example.com/?roomId=one&liveUuid=u1",
+			"https://example.com/?roomId=two",
+		}, "\n")
+		if err := os.WriteFile(urlFile, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		titles, err := processURLFromFile(urlFile, saveDir, 2, config, "", "")
+		if err == nil {
+			t.Fatal("processURLFromFile() error = nil, want non-nil")
+		}
+		if len(titles) != 1 || titles[0] != "title-one" {
+			t.Fatalf("titles = %v, want [title-one]", titles)
+		}
+	})
 }
