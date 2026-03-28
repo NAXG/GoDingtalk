@@ -83,10 +83,10 @@ func isWSLPath(path string) bool {
 	return strings.HasPrefix(path, "/mnt/") && len(path) > len("/mnt/x/")
 }
 
-func normalizePathForRuntime(path string) string {
-	switch runtime.GOOS {
+func normalizePathForTarget(path string, goos string, inWSL bool) string {
+	switch goos {
 	case "linux":
-		if isWSLEnvironment() && isWindowsPath(path) {
+		if inWSL && isWindowsPath(path) {
 			return convertWindowsPathToWSL(path)
 		}
 	case "windows":
@@ -95,6 +95,10 @@ func normalizePathForRuntime(path string) string {
 		}
 	}
 	return path
+}
+
+func normalizePathForRuntime(path string) string {
+	return normalizePathForTarget(path, runtime.GOOS, isWSLEnvironment())
 }
 
 // sanitizeFileName 清理文件名中的非法字符，替换为下划线
@@ -120,6 +124,13 @@ var Version = "dev"
 
 // 全局HTTP客户端，在 main 中根据配置初始化
 var httpClient *http.Client
+
+var (
+	newDownloader  = M3u8Downloader.NewDownloader
+	ffmpegFunc     = ffmpeg
+	tempDirFactory = generateUniqueTempDir
+	tempDirCleanup = cleanupTempDir
+)
 
 // initHTTPClient 初始化全局HTTP客户端
 func initHTTPClient(timeout int) {
@@ -275,7 +286,7 @@ func M3u8Down(title, playbackUrl, saveDir string, Thread int, tempDir string) er
 		return fmt.Errorf("临时目录不能为空")
 	}
 
-	m3u8 := M3u8Downloader.NewDownloader()
+	m3u8 := newDownloader()
 	m3u8.SetUrl(playbackUrl)
 
 	// 清理文件名中的非法字符，避免文件路径创建失败
@@ -291,7 +302,7 @@ func M3u8Down(title, playbackUrl, saveDir string, Thread int, tempDir string) er
 	}
 	fmt.Println("下载成功")
 
-	if err := ffmpeg(title, tempDir, saveDir); err != nil {
+	if err := ffmpegFunc(title, tempDir, saveDir); err != nil {
 		return fmt.Errorf("视频转换失败: %w", err)
 	}
 
@@ -397,12 +408,12 @@ func getLiveRoomPublicInfo(roomId, liveUuid, saveDir string, Thread int, config 
 		return "", fmt.Errorf("回放地址为空，可能直播尚未结束或回放不可用")
 	}
 
-	tempDir, err := generateUniqueTempDir(saveDir)
+	tempDir, err := tempDirFactory(saveDir)
 	if err != nil {
 		return title, err
 	}
 	fmt.Printf("临时文件夹创建成功: %s\n", tempDir)
-	defer cleanupTempDir(tempDir)
+	defer tempDirCleanup(tempDir)
 
 	if err := M3u8Down(title, playbackUrl, saveDir, Thread, tempDir); err != nil {
 		return title, err
@@ -411,22 +422,105 @@ func getLiveRoomPublicInfo(roomId, liveUuid, saveDir string, Thread int, config 
 	return title, nil
 }
 
+// extractParamsFromURL 从多种格式的钉钉直播URL中提取 roomId 和 liveUuid
+// 支持的格式：
+// 1. 查询参数: ?roomId=XXX&liveUuid=XXX
+// 2. Hash路由: #/live?roomId=XXX&liveUuid=XXX 或 #/room/XXX/live/XXX
+// 3. 路径参数: /live-room/XXX/XXX
+// 4. 只有liveUuid: ?liveUuid=XXX (某些API只需要liveUuid)
+func extractParamsFromURL(urlStr string) (roomId, liveUuid string, err error) {
+	if strings.TrimSpace(urlStr) == "" {
+		return "", "", fmt.Errorf("URL 不能为空")
+	}
+
+	parsedURL, err := url.Parse(urlStr)
+	if err != nil {
+		return "", "", fmt.Errorf("解析 URL 时出错: %w", err)
+	}
+
+	// 1. 首先尝试从查询参数提取
+	queryParams := parsedURL.Query()
+	roomId = queryParams.Get("roomId")
+	liveUuid = queryParams.Get("liveUuid")
+
+	// 2. 如果查询参数中没有，尝试从 hash 片段提取
+	if roomId == "" || liveUuid == "" {
+		hash := parsedURL.Fragment
+		if hash != "" {
+			// Hash 可能包含查询参数，如 #/union?roomId=XXX&liveUuid=XXX
+			// 需要找到 ? 后面的部分
+			hashQueryIndex := strings.Index(hash, "?")
+			if hashQueryIndex != -1 {
+				hashQuery := hash[hashQueryIndex+1:]
+				hashURL, err := url.Parse("http://dummy.com/?" + hashQuery)
+				if err == nil {
+					hashParams := hashURL.Query()
+					if roomId == "" {
+						roomId = hashParams.Get("roomId")
+					}
+					if liveUuid == "" {
+						liveUuid = hashParams.Get("liveUuid")
+					}
+				}
+			}
+
+			// 尝试从 hash 路径中提取，如 #/room/12345/live/abc-def
+			if roomId == "" || liveUuid == "" {
+				hashParts := strings.Split(hash, "/")
+				for i, part := range hashParts {
+					lowerPart := strings.ToLower(part)
+					if lowerPart == "room" && i+1 < len(hashParts) && roomId == "" {
+						roomId = hashParts[i+1]
+					}
+					if lowerPart == "live" && i+1 < len(hashParts) && liveUuid == "" {
+						liveUuid = hashParts[i+1]
+					}
+				}
+			}
+		}
+	}
+
+	// 3. 尝试从路径中提取，如 /live-room/12345/abc-def
+	if roomId == "" || liveUuid == "" {
+		pathParts := strings.Split(parsedURL.Path, "/")
+		for i, part := range pathParts {
+			lowerPart := strings.ToLower(part)
+			if (lowerPart == "live-room" || lowerPart == "liveroom") && i+2 < len(pathParts) {
+				if roomId == "" {
+					roomId = pathParts[i+1]
+				}
+				if liveUuid == "" {
+					liveUuid = pathParts[i+2]
+				}
+			}
+		}
+	}
+
+	// 4. 清理参数（移除可能的额外字符）
+	roomId = strings.TrimSpace(roomId)
+	liveUuid = strings.TrimSpace(liveUuid)
+
+	// 移除 URL 编码
+	roomId, _ = url.QueryUnescape(roomId)
+	liveUuid, _ = url.QueryUnescape(liveUuid)
+
+	return roomId, liveUuid, nil
+}
+
 // processURL 函数接收一个URL字符串作为参数，并解析出其中的roomId和liveUuid参数
 // 然后调用getLiveRoomPublicInfo函数进行处理
 // 如果URL解析出错或缺少roomId或liveUuid参数，则打印错误信息并返回
 func processURL(urlStr, saveDir string, Thread int, config *Config, videoListFile, fileExt string, processedCount int) (string, error) {
-	// 解析 URL
-	parsedURL, err := url.Parse(urlStr)
+	roomId, liveUuid, err := extractParamsFromURL(urlStr)
 	if err != nil {
-		return "", fmt.Errorf("解析 URL 时出错: %w", err)
+		return "", err
 	}
 
-	// 提取查询参数中的 roomId 和 liveUuid
-	queryParams := parsedURL.Query()
-	roomId := queryParams.Get("roomId")
-	liveUuid := queryParams.Get("liveUuid")
 	if roomId == "" || liveUuid == "" {
-		return "", fmt.Errorf("URL 中缺少 roomId 或 liveUuid 参数")
+		return "", fmt.Errorf("URL 中缺少 roomId 或 liveUuid 参数，请确保 URL 格式正确。支持的格式包括：\n" +
+			"1. 查询参数格式: ?roomId=XXX&liveUuid=XXX\n" +
+			"2. Hash路由格式: #/live?roomId=XXX&liveUuid=XXX\n" +
+			"3. 路径参数格式: /live-room/XXX/XXX")
 	}
 
 	title, err := getLiveRoomPublicInfo(roomId, liveUuid, saveDir, Thread, config)

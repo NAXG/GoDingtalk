@@ -785,3 +785,134 @@ func TestProcessURLFromFile(t *testing.T) {
 		}
 	})
 }
+
+// ==================== Issue #6: URL Parsing Tests ====================
+
+func TestExtractParamsFromURL(t *testing.T) {
+	tests := []struct {
+		name         string
+		urlStr       string
+		wantRoomId   string
+		wantLiveUuid string
+		wantErr      bool
+	}{
+		{
+			name:         "标准查询参数格式",
+			urlStr:       "https://n.dingtalk.com/dingding/live-room/index.html?roomId=12345&liveUuid=abc-def-123",
+			wantRoomId:   "12345",
+			wantLiveUuid: "abc-def-123",
+			wantErr:      false,
+		},
+		{
+			name:         "只有liveUuid的查询参数",
+			urlStr:       "https://h5.dingtalk.com/group-live-share/index.htm?type=2&liveUuid=abc-def-123",
+			wantRoomId:   "",
+			wantLiveUuid: "abc-def-123",
+			wantErr:      false,
+		},
+		{
+			name:         "Hash路由带查询参数",
+			urlStr:       "https://n.dingtalk.com/dingding/live-room/index.html?roomId=12345#/live?liveUuid=abc-def-123",
+			wantRoomId:   "12345",
+			wantLiveUuid: "abc-def-123",
+			wantErr:      false,
+		},
+		{
+			name:         "Hash路由路径格式",
+			urlStr:       "https://n.dingtalk.com/app/live/index.html#/room/12345/live/abc-def-123",
+			wantRoomId:   "12345",
+			wantLiveUuid: "abc-def-123",
+			wantErr:      false,
+		},
+		{
+			name:         "路径参数格式",
+			urlStr:       "https://n.dingtalk.com/dingding/live-room/12345/abc-def-123",
+			wantRoomId:   "12345",
+			wantLiveUuid: "abc-def-123",
+			wantErr:      false,
+		},
+		{
+			name:         "复杂Hash路由",
+			urlStr:       "https://h5.dingtalk.com/group-live-share/index.htm?type=2&liveFromType=6&liveUuid=abc-def#/union",
+			wantRoomId:   "",
+			wantLiveUuid: "abc-def",
+			wantErr:      false,
+		},
+		{
+			name:         "URL编码的参数",
+			urlStr:       "https://n.dingtalk.com/dingding/live-room/index.html?roomId=123%2045&liveUuid=abc%20def",
+			wantRoomId:   "123 45",
+			wantLiveUuid: "abc def",
+			wantErr:      false,
+		},
+		{
+			name:         "空URL",
+			urlStr:       "",
+			wantRoomId:   "",
+			wantLiveUuid: "",
+			wantErr:      true,
+		},
+		{
+			name:         "无效URL",
+			urlStr:       "://invalid-url",
+			wantRoomId:   "",
+			wantLiveUuid: "",
+			wantErr:      true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotRoomId, gotLiveUuid, err := extractParamsFromURL(tt.urlStr)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("extractParamsFromURL() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if gotRoomId != tt.wantRoomId {
+				t.Errorf("extractParamsFromURL() gotRoomId = %v, want %v", gotRoomId, tt.wantRoomId)
+			}
+			if gotLiveUuid != tt.wantLiveUuid {
+				t.Errorf("extractParamsFromURL() gotLiveUuid = %v, want %v", gotLiveUuid, tt.wantLiveUuid)
+			}
+		})
+	}
+}
+
+func TestExtractParamsFromURL_RealWorldCases(t *testing.T) {
+	// 测试真实世界的URL格式（来自issue报告）
+	tests := []struct {
+		name         string
+		urlStr       string
+		wantRoomId   string
+		wantLiveUuid string
+	}{
+		{
+			name:         "Issue #6 可能的URL格式1 - 标准格式",
+			urlStr:       "https://n.dingtalk.com/dingding/live-room/index.html?roomId=123456789&liveUuid=abcdef-123456",
+			wantRoomId:   "123456789",
+			wantLiveUuid: "abcdef-123456",
+		},
+		{
+			name:         "Issue #6 可能的URL格式2 - 带hash",
+			urlStr:       "https://h5.dingtalk.com/group-live-share/index.htm?liveUuid=test-uuid-123#/union",
+			wantRoomId:   "",
+			wantLiveUuid: "test-uuid-123",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotRoomId, gotLiveUuid, err := extractParamsFromURL(tt.urlStr)
+			if err != nil {
+				t.Errorf("extractParamsFromURL() unexpected error = %v", err)
+				return
+			}
+			if gotRoomId != tt.wantRoomId {
+				t.Errorf("extractParamsFromURL() gotRoomId = %v, want %v", gotRoomId, tt.wantRoomId)
+			}
+			if gotLiveUuid != tt.wantLiveUuid {
+				t.Errorf("extractParamsFromURL() gotLiveUuid = %v, want %v", gotLiveUuid, tt.wantLiveUuid)
+			}
+		})
+	}
+}
