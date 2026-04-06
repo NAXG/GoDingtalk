@@ -29,6 +29,21 @@ go build -o GoDingtalk .
 ./GoDingtalk -url="https://n.dingtalk.com/dingding/live-room/index.html?roomId=XXXX&liveUuid=XXXX"
 ```
 
+### 指定 Chrome 路径
+
+如果系统安装了多个 Chrome 版本，或 Chrome 不在标准路径：
+
+```bash
+# macOS
+./GoDingtalk -url="..." -chromePath="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+
+# Windows
+./GoDingtalk.exe -url="..." -chromePath="C:\Program Files\Google\Chrome\Application\chrome.exe"
+
+# WSL (指定 Windows 版 Chrome)
+./GoDingtalk -url="..." -chromePath="/mnt/c/Program Files/Google/Chrome/Application/chrome.exe"
+```
+
 ### 批量下载
 
 创建文本文件（如 `urls.txt`），每行一个 URL（`#` 开头的行会被忽略）：
@@ -55,6 +70,7 @@ go build -o GoDingtalk .
 | `-cookies` | Cookies 文件路径 | |
 | `-httpTimeout` | HTTP 超时时间（秒） | 30 |
 | `-chromeTimeout` | Chrome 登录超时时间（分钟） | 20 |
+| `-chromePath` | Chrome/Chromium 可执行文件路径 | 自动查找 |
 | `-version` | 显示版本号 | |
 
 ### 配置文件
@@ -66,6 +82,7 @@ go build -o GoDingtalk .
   "thread_count": 10,
   "save_directory": "video/",
   "cookies_file": ".goDingtalkConfig/cookies.json",
+  "chrome_path": "",
   "chrome_timeout": 20,
   "http_timeout": 30
 }
