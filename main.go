@@ -201,6 +201,18 @@ func startChrome(config *Config) error {
 		chromedp.NoDefaultBrowserCheck,
 	)
 
+	// 如果指定了 Chrome 路径，使用它
+	if config.ChromePath != "" {
+		normalizedPath := normalizePathForRuntime(config.ChromePath)
+		if normalizedPath != config.ChromePath {
+			fmt.Printf("Chrome路径已转换: %s → %s\n", config.ChromePath, normalizedPath)
+		}
+		opts = append(opts, chromedp.ExecPath(normalizedPath))
+		fmt.Printf("使用指定的Chrome路径: %s\n", normalizedPath)
+	} else {
+		fmt.Println("使用系统自动查找的Chrome")
+	}
+
 	var siteCookies []*network.Cookie
 	parentCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
 	defer cancel()
@@ -642,6 +654,7 @@ func main() {
 	videoListFile := flag.String("videoList", "", "视频列表文件路径，格式为 -videoList \"/path/to/video_list.txt\"")
 	httpTimeout := flag.Int("httpTimeout", 0, "HTTP超时时间，单位秒 (默认: 30)")
 	chromeTimeout := flag.Int("chromeTimeout", 0, "Chrome登录超时时间，单位分钟 (默认: 20)")
+	chromePath := flag.String("chromePath", "", "Chrome可执行文件路径，用于指定特定的Chrome/Chromium位置")
 	cookiesFile := flag.String("cookies", "", "Cookies文件路径")
 
 	flag.Parse()
@@ -671,6 +684,9 @@ func main() {
 	}
 	if *chromeTimeout > 0 {
 		config.ChromeTimeout = *chromeTimeout
+	}
+	if *chromePath != "" {
+		config.ChromePath = *chromePath
 	}
 	if *cookiesFile != "" {
 		config.CookiesFile = *cookiesFile

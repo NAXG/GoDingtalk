@@ -14,6 +14,8 @@ type Config struct {
 	SaveDirectory string `json:"save_directory"`
 	// Cookies文件路径
 	CookiesFile string `json:"cookies_file"`
+	// Chrome可执行文件路径
+	ChromePath string `json:"chrome_path"`
 	// Chrome超时时间（分钟）
 	ChromeTimeout int `json:"chrome_timeout"`
 	// HTTP超时时间（秒）
@@ -49,6 +51,7 @@ func DefaultConfig() *Config {
 		ThreadCount:   10,
 		SaveDirectory: "video/",
 		CookiesFile:   filepath.Join(configDir, "cookies.json"),
+		ChromePath:    "",
 		ChromeTimeout: 20,
 		HTTPTimeout:   30,
 	}
