@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"GoDingtalk/M3u8Downloader"
 
@@ -127,10 +129,24 @@ var publishedAtFields = []string{"startTime", "endTime"}
 
 // videoName 由标题和发布时间组成保存用的文件名，避免同名视频互相覆盖
 func videoName(title string, publishedAt time.Time) string {
-	if publishedAt.IsZero() {
-		return sanitizeFileName(title)
+	name := sanitizeFileName(title)
+	suffix := ""
+	if !publishedAt.IsZero() {
+		suffix = "_" + publishedAt.Format(videoTimeLayout)
 	}
-	return sanitizeFileName(title + "_" + publishedAt.Format(videoTimeLayout))
+	// 为最长扩展名 .mp4 预留空间，兼容常见文件系统的 255 字节限制。
+	const maxBaseNameBytes = 255 - len(".mp4")
+	if len(name)+len(suffix) > maxBaseNameBytes {
+		// 原始标题的短哈希避免共享长前缀的标题在截断后重名。
+		hash := sha256.Sum256([]byte(title))
+		suffix = fmt.Sprintf("_%x", hash[:6]) + suffix
+		budget := maxBaseNameBytes - len(suffix)
+		for len(name) > budget {
+			_, size := utf8.DecodeLastRuneInString(name)
+			name = name[:len(name)-size]
+		}
+	}
+	return name + suffix
 }
 
 // extractPublishedAt 从直播详情中解析发布时间，接口未返回时返回零值
