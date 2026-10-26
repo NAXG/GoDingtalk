@@ -129,11 +129,11 @@ var publishedAtFields = []string{"startTime", "endTime"}
 
 // videoName 由标题和发布时间组成保存用的文件名，避免同名视频互相覆盖
 func videoName(title string, publishedAt time.Time) string {
-	name := sanitizeFileName(title)
-	suffix := ""
-	if !publishedAt.IsZero() {
-		suffix = "_" + publishedAt.Format(videoTimeLayout)
+	if publishedAt.IsZero() {
+		return sanitizeFileName(title)
 	}
+	name := sanitizeInvalidChars.ReplaceAllString(title, "_")
+	suffix := "_" + publishedAt.Format(videoTimeLayout)
 	// 为最长扩展名 .mp4 预留空间，兼容常见文件系统的 255 字节限制。
 	const maxBaseNameBytes = 255 - len(".mp4")
 	if len(name)+len(suffix) > maxBaseNameBytes {

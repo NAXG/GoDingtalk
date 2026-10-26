@@ -308,25 +308,31 @@ func TestVideoName(t *testing.T) {
 	if got := videoName("a/b", publishedAt); got != "a_b_20250304_090507" {
 		t.Fatalf("videoName() = %q, want %q", got, "a_b_20250304_090507")
 	}
+	if got := videoName("", publishedAt); got != "_20250304_090507" {
+		t.Fatalf("empty title behavior changed: %q", got)
+	}
+	longTitle := strings.Repeat("周", 100)
+	if got := videoName(longTitle, time.Time{}); got != longTitle {
+		t.Fatalf("title without publish time was changed: %q", got)
+	}
 }
 
 func TestVideoNameLongTitle(t *testing.T) {
-	for _, publishedAt := range []time.Time{time.Time{}, time.Date(2025, 3, 4, 9, 5, 7, 0, time.UTC)} {
-		for _, title := range []string{strings.Repeat("a", 240), strings.Repeat("周", 100)} {
-			name := videoName(title, publishedAt)
-			if !utf8.ValidString(name) || len(name+".mp4") > 255 {
-				t.Fatalf("invalid or oversized filename: %q", name)
-			}
-			if !publishedAt.IsZero() && !strings.HasSuffix(name, "_20250304_090507") {
-				t.Fatalf("publish time lost: %q", name)
-			}
-			if name == videoName(title+"另一场", publishedAt) {
-				t.Fatalf("distinct titles produced the same filename: %q", name)
-			}
-			for _, ext := range []string{".ts", ".mp4"} {
-				if err := os.WriteFile(filepath.Join(t.TempDir(), name+ext), []byte("video"), 0600); err != nil {
-					t.Fatalf("cannot create %s file: %v", ext, err)
-				}
+	publishedAt := time.Date(2025, 3, 4, 9, 5, 7, 0, time.UTC)
+	for _, title := range []string{strings.Repeat("a", 240), strings.Repeat("周", 100)} {
+		name := videoName(title, publishedAt)
+		if !utf8.ValidString(name) || len(name+".mp4") > 255 {
+			t.Fatalf("invalid or oversized filename: %q", name)
+		}
+		if !strings.HasSuffix(name, "_20250304_090507") {
+			t.Fatalf("publish time lost: %q", name)
+		}
+		if name == videoName(title+"另一场", publishedAt) {
+			t.Fatalf("distinct titles produced the same filename: %q", name)
+		}
+		for _, ext := range []string{".ts", ".mp4"} {
+			if err := os.WriteFile(filepath.Join(t.TempDir(), name+ext), []byte("video"), 0600); err != nil {
+				t.Fatalf("cannot create %s file: %v", ext, err)
 			}
 		}
 	}
