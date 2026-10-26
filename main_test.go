@@ -298,6 +298,78 @@ func TestSanitizeFileName(t *testing.T) {
 	}
 }
 
+func TestVideoName(t *testing.T) {
+	publishedAt := time.Date(2025, 3, 4, 9, 5, 7, 0, time.Local)
+
+	if got := videoName("周会", time.Time{}); got != "周会" {
+		t.Fatalf("videoName() without publish time = %q, want %q", got, "周会")
+	}
+	if got := videoName("a/b", publishedAt); got != "a_b_20250304_090507" {
+		t.Fatalf("videoName() = %q, want %q", got, "a_b_20250304_090507")
+	}
+}
+
+func TestVideoNameWithRealPublishTime(t *testing.T) {
+	// 取自真实接口响应：roomId=Z1i4fBSgq1，startTime=1784115702000（毫秒）
+	detail := map[string]interface{}{
+		"title":     "古晶发起的直播",
+		"startTime": float64(1784115702000),
+		"endTime":   float64(1784122971000),
+	}
+	publishedAt := extractPublishedAt(detail).In(time.FixedZone("CST", 8*3600))
+
+	if got, want := videoName("古晶发起的直播", publishedAt), "古晶发起的直播_20260715_194142"; got != want {
+		t.Fatalf("videoName() = %q, want %q", got, want)
+	}
+}
+
+func TestExtractPublishedAt(t *testing.T) {
+	tests := []struct {
+		name   string
+		detail map[string]interface{}
+		want   time.Time
+	}{
+		{
+			name:   "startTime",
+			detail: map[string]interface{}{"startTime": float64(1735689600000)},
+			want:   time.UnixMilli(1735689600000),
+		},
+		{
+			name:   "startTime 优先于 endTime",
+			detail: map[string]interface{}{"startTime": float64(1735689600000), "endTime": float64(1735776000000)},
+			want:   time.UnixMilli(1735689600000),
+		},
+		{
+			name:   "startTime 缺失时回退到 endTime",
+			detail: map[string]interface{}{"endTime": float64(1735776000000)},
+			want:   time.UnixMilli(1735776000000),
+		},
+		{
+			name:   "无时间字段",
+			detail: map[string]interface{}{"title": "demo"},
+			want:   time.Time{},
+		},
+		{
+			name:   "时间值为零",
+			detail: map[string]interface{}{"startTime": float64(0)},
+			want:   time.Time{},
+		},
+		{
+			name:   "时间值非数字",
+			detail: map[string]interface{}{"startTime": "1735689600000"},
+			want:   time.Time{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := extractPublishedAt(tt.detail); !got.Equal(tt.want) {
+				t.Fatalf("extractPublishedAt() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCreateVideoListFile(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -649,15 +721,51 @@ func TestGetLiveRoomPublicInfo(t *testing.T) {
 		}
 		tempDirCleanup = cleanupTempDir
 
-		title, err := getLiveRoomPublicInfo("room", "uuid", tmpDir, 2, config)
+		title, publishedAt, err := getLiveRoomPublicInfo("room", "uuid", tmpDir, 2, config)
 		if err != nil {
 			t.Fatalf("getLiveRoomPublicInfo() error = %v", err)
 		}
 		if title != "demo:title" {
 			t.Fatalf("title = %q, want %q", title, "demo:title")
 		}
+		if !publishedAt.IsZero() {
+			t.Fatalf("publishedAt = %v, want zero when API has no time field", publishedAt)
+		}
+		if fd.movieName != "demo_title" {
+			t.Fatalf("movie name = %q, want %q", fd.movieName, "demo_title")
+		}
 		if _, err := os.Stat(createdTempDir); !os.IsNotExist(err) {
 			t.Fatalf("temp dir %q should be removed", createdTempDir)
+		}
+	})
+
+	t.Run("filename includes publish time", func(t *testing.T) {
+		httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			// 1735689600000ms = 2025-01-01 08:00:00 UTC+8
+			return jsonHTTPResponse(`{"openLiveDetailModel":{"title":"周会","playbackUrl":"https://example.com/media.m3u8","startTime":1735689600000}}`), nil
+		})}
+
+		fd := &fakeDownloader{defaultDownload: true}
+		newDownloader = func() M3u8Downloader.M3u8Downloader { return fd }
+		ffmpegFunc = func(ts, tempDir, saveDir string) error { return nil }
+		tempDirFactory = func(saveDir string) (string, error) { return os.MkdirTemp(saveDir, "time-*") }
+		tempDirCleanup = cleanupTempDir
+
+		title, publishedAt, err := getLiveRoomPublicInfo("room", "uuid", tmpDir, 2, config)
+		if err != nil {
+			t.Fatalf("getLiveRoomPublicInfo() error = %v", err)
+		}
+		if title != "周会" {
+			t.Fatalf("title = %q", title)
+		}
+		if want := time.UnixMilli(1735689600000); !publishedAt.Equal(want) {
+			t.Fatalf("publishedAt = %v, want %v", publishedAt, want)
+		}
+		if want := videoName("周会", publishedAt); fd.movieName != want {
+			t.Fatalf("movie name = %q, want %q", fd.movieName, want)
+		}
+		if !strings.Contains(fd.movieName, publishedAt.Format(videoTimeLayout)) {
+			t.Fatalf("movie name %q should contain publish time", fd.movieName)
 		}
 	})
 
@@ -666,7 +774,7 @@ func TestGetLiveRoomPublicInfo(t *testing.T) {
 			return jsonHTTPResponse(`{"openLiveDetailModel":{"title":"demo","playbackUrl":""}}`), nil
 		})}
 
-		if _, err := getLiveRoomPublicInfo("room", "uuid", tmpDir, 2, config); err == nil {
+		if _, _, err := getLiveRoomPublicInfo("room", "uuid", tmpDir, 2, config); err == nil {
 			t.Fatal("getLiveRoomPublicInfo() error = nil, want non-nil")
 		}
 	})
@@ -677,7 +785,7 @@ func TestGetLiveRoomPublicInfo(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if _, err := getLiveRoomPublicInfo("room", "uuid", tmpDir, 2, &Config{CookiesFile: badCookies}); err == nil {
+		if _, _, err := getLiveRoomPublicInfo("room", "uuid", tmpDir, 2, &Config{CookiesFile: badCookies}); err == nil {
 			t.Fatal("getLiveRoomPublicInfo() error = nil, want non-nil")
 		}
 	})
@@ -687,7 +795,7 @@ func TestGetLiveRoomPublicInfo(t *testing.T) {
 			return jsonHTTPResponse(`not-json`), nil
 		})}
 
-		if _, err := getLiveRoomPublicInfo("room", "uuid", tmpDir, 2, config); err == nil {
+		if _, _, err := getLiveRoomPublicInfo("room", "uuid", tmpDir, 2, config); err == nil {
 			t.Fatal("getLiveRoomPublicInfo() error = nil, want non-nil")
 		}
 	})
@@ -697,7 +805,7 @@ func TestGetLiveRoomPublicInfo(t *testing.T) {
 			return jsonHTTPResponse(`{"other":"value"}`), nil
 		})}
 
-		if _, err := getLiveRoomPublicInfo("room", "uuid", tmpDir, 2, config); err == nil {
+		if _, _, err := getLiveRoomPublicInfo("room", "uuid", tmpDir, 2, config); err == nil {
 			t.Fatal("getLiveRoomPublicInfo() error = nil, want non-nil")
 		}
 	})
@@ -707,7 +815,7 @@ func TestGetLiveRoomPublicInfo(t *testing.T) {
 			return jsonHTTPResponse(`{"code":"1003"}`), nil
 		})}
 
-		_, err := getLiveRoomPublicInfo("room", "uuid", tmpDir, 2, config)
+		_, _, err := getLiveRoomPublicInfo("room", "uuid", tmpDir, 2, config)
 		if err == nil {
 			t.Fatal("getLiveRoomPublicInfo() error = nil, want non-nil")
 		}
@@ -721,7 +829,7 @@ func TestGetLiveRoomPublicInfo(t *testing.T) {
 			return jsonHTTPResponse(`{"openLiveDetailModel":{"title":"demo","playbackUrl":null}}`), nil
 		})}
 
-		_, err := getLiveRoomPublicInfo("room", "uuid", tmpDir, 2, config)
+		_, _, err := getLiveRoomPublicInfo("room", "uuid", tmpDir, 2, config)
 		if err == nil {
 			t.Fatal("getLiveRoomPublicInfo() error = nil, want non-nil")
 		}
@@ -739,7 +847,7 @@ func TestGetLiveRoomPublicInfo(t *testing.T) {
 			}, nil
 		})}
 
-		_, err := getLiveRoomPublicInfo("room", "uuid", tmpDir, 2, config)
+		_, _, err := getLiveRoomPublicInfo("room", "uuid", tmpDir, 2, config)
 		if err == nil {
 			t.Fatal("getLiveRoomPublicInfo() error = nil, want non-nil")
 		}
@@ -783,7 +891,7 @@ func TestProcessURL(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		title, err := processURL("https://example.com/?roomId=1&liveUuid=2", saveDir, 3, config, listPath, ".m3u8", 1)
+		title, _, err := processURL("https://example.com/?roomId=1&liveUuid=2", saveDir, 3, config, listPath, ".m3u8", 1)
 		if err != nil {
 			t.Fatalf("processURL() error = %v", err)
 		}
@@ -801,7 +909,7 @@ func TestProcessURL(t *testing.T) {
 	})
 
 	t.Run("missing query params", func(t *testing.T) {
-		if _, err := processURL("https://example.com/?roomId=1", saveDir, 3, config, "", "", 1); err == nil {
+		if _, _, err := processURL("https://example.com/?roomId=1", saveDir, 3, config, "", "", 1); err == nil {
 			t.Fatal("processURL() error = nil, want non-nil")
 		}
 	})

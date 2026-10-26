@@ -119,6 +119,30 @@ func sanitizeFileName(fileName string) string {
 	return sanitized
 }
 
+// videoTimeLayout 文件名中附加的直播发布时间格式
+const videoTimeLayout = "20060102_150405"
+
+// publishedAtFields 直播发布时间字段（毫秒时间戳），startTime 为开播时间，endTime 为结束时间
+var publishedAtFields = []string{"startTime", "endTime"}
+
+// videoName 由标题和发布时间组成保存用的文件名，避免同名视频互相覆盖
+func videoName(title string, publishedAt time.Time) string {
+	if publishedAt.IsZero() {
+		return sanitizeFileName(title)
+	}
+	return sanitizeFileName(title + "_" + publishedAt.Format(videoTimeLayout))
+}
+
+// extractPublishedAt 从直播详情中解析发布时间，接口未返回时返回零值
+func extractPublishedAt(detail map[string]interface{}) time.Time {
+	for _, field := range publishedAtFields {
+		if ms, ok := detail[field].(float64); ok && ms > 0 {
+			return time.UnixMilli(int64(ms))
+		}
+	}
+	return time.Time{}
+}
+
 // Version 程序版本号，通过 -ldflags "-X main.Version=vX.X.X" 注入
 var Version = "dev"
 
@@ -177,13 +201,13 @@ func findFFmpeg() (string, error) {
 }
 
 // ffmpeg 把ts转换mp4
-func ffmpeg(ts, tempDir, saveDir string) error {
+func ffmpeg(name, tempDir, saveDir string) error {
 	fmt.Println("正在转换ts为mp4...")
 
 	// 清理文件名中的非法字符
-	sanitizedTs := sanitizeFileName(ts)
-	tsPath := filepath.Join(tempDir, sanitizedTs+".ts")
-	mp4Path := filepath.Join(saveDir, sanitizedTs+".mp4")
+	sanitizedVideoName := sanitizeFileName(name)
+	tsPath := filepath.Join(tempDir, sanitizedVideoName+".ts")
+	mp4Path := filepath.Join(saveDir, sanitizedVideoName+".mp4")
 
 	ffmpegPath, err := findFFmpeg()
 	if err != nil {
@@ -197,7 +221,7 @@ func ffmpeg(ts, tempDir, saveDir string) error {
 	}
 
 	// 使用清理后的文件名输出日志
-	fmt.Println(sanitizedTs + ".mp4 转换完成")
+	fmt.Println(sanitizedVideoName + ".mp4 转换完成")
 
 	return nil
 }
@@ -349,13 +373,13 @@ func startChrome(config *Config) error {
 }
 
 // M3u8Down 函数用于下载直播回放视频
-// title：直播标题
+// name：保存用的文件名（标题 + 发布时间，不含扩展名）
 // playbackUrl：直播回放链接
 // saveDir: 保存目录
 // Thread：线程数
 // tempDir: 临时目录（必须提供，不能为空）
 // 注意：临时目录的创建和清理由调用方负责
-func M3u8Down(title, playbackUrl, saveDir string, Thread int, tempDir string) error {
+func M3u8Down(name, playbackUrl, saveDir string, Thread int, tempDir string) error {
 	// 临时目录必须由调用方提供
 	if tempDir == "" {
 		return fmt.Errorf("临时目录不能为空")
@@ -365,8 +389,8 @@ func M3u8Down(title, playbackUrl, saveDir string, Thread int, tempDir string) er
 	m3u8.SetUrl(playbackUrl)
 
 	// 清理文件名中的非法字符，避免文件路径创建失败
-	sanitizedTitle := sanitizeFileName(title)
-	m3u8.SetMovieName(sanitizedTitle)
+	sanitizedVideoName := sanitizeFileName(name)
+	m3u8.SetMovieName(sanitizedVideoName)
 
 	m3u8.SetNumOfThread(Thread)
 	m3u8.SetIfShowTheBar(true)
@@ -377,7 +401,7 @@ func M3u8Down(title, playbackUrl, saveDir string, Thread int, tempDir string) er
 	}
 	fmt.Println("下载成功")
 
-	if err := ffmpegFunc(title, tempDir, saveDir); err != nil {
+	if err := ffmpegFunc(name, tempDir, saveDir); err != nil {
 		return fmt.Errorf("视频转换失败: %w", err)
 	}
 
@@ -387,29 +411,30 @@ func M3u8Down(title, playbackUrl, saveDir string, Thread int, tempDir string) er
 // getLiveRoomPublicInfo 函数用于获取钉钉直播间的公开信息
 // roomId：直播间ID
 // liveUuid：直播UUID
-func getLiveRoomPublicInfo(roomId, liveUuid, saveDir string, Thread int, config *Config) (string, error) {
+// 返回值中的 publishedAt 为直播发布时间，接口未提供时为零值
+func getLiveRoomPublicInfo(roomId, liveUuid, saveDir string, Thread int, config *Config) (string, time.Time, error) {
 	// 构造URL
 	urlStr := "https://lv.dingtalk.com/getOpenLiveInfo?roomId=" + roomId + "&liveUuid=" + liveUuid
 	urlObj, err := url.Parse(urlStr)
 	if err != nil {
-		return "", fmt.Errorf("URL 解析失败: %w", err)
+		return "", time.Time{}, fmt.Errorf("URL 解析失败: %w", err)
 	}
 
 	// 创建请求
 	req, err := http.NewRequest("GET", urlObj.String(), nil)
 	if err != nil {
-		return "", fmt.Errorf("创建请求失败: %w", err)
+		return "", time.Time{}, fmt.Errorf("创建请求失败: %w", err)
 	}
 
 	// 读取Cookies文件
 	jsonCookies, err := os.ReadFile(config.CookiesFile)
 	if err != nil {
-		return "", fmt.Errorf("读取 Cookies 文件失败: %w", err)
+		return "", time.Time{}, fmt.Errorf("读取 Cookies 文件失败: %w", err)
 	}
 
 	var cookies map[string]string
 	if err := json.Unmarshal(jsonCookies, &cookies); err != nil {
-		return "", fmt.Errorf("解析 Cookies 失败: %w", err)
+		return "", time.Time{}, fmt.Errorf("解析 Cookies 失败: %w", err)
 	}
 
 	// 添加Cookies到请求
@@ -420,7 +445,7 @@ func getLiveRoomPublicInfo(roomId, liveUuid, saveDir string, Thread int, config 
 	// 确保 PC_SESSION 使用 LV_PC_SESSION 的值
 	CookiepcSession, ok := cookies["LV_PC_SESSION"]
 	if !ok {
-		return "", fmt.Errorf("未找到 LV_PC_SESSION Cookie，请重新登录")
+		return "", time.Time{}, fmt.Errorf("未找到 LV_PC_SESSION Cookie，请重新登录")
 	}
 	cookieStr.WriteString(fmt.Sprintf("PC_SESSION=%s", CookiepcSession))
 	cookieHeader := cookieStr.String()
@@ -431,67 +456,75 @@ func getLiveRoomPublicInfo(roomId, liveUuid, saveDir string, Thread int, config 
 	// 发送请求（使用全局 HTTP 客户端）
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("发送请求失败: %w", err)
+		return "", time.Time{}, fmt.Errorf("发送请求失败: %w", err)
 	}
 	defer resp.Body.Close()
 
 	// 检查 HTTP 状态码，避免把错误页（如 401/302 跳转）当作正常 JSON 解析
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("钉钉接口请求失败(HTTP %d)，登录可能已过期，请使用 -login 参数重新登录", resp.StatusCode)
+		return "", time.Time{}, fmt.Errorf("钉钉接口请求失败(HTTP %d)，登录可能已过期，请使用 -login 参数重新登录", resp.StatusCode)
 	}
 
 	// 读取响应内容
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("读取响应内容失败: %w", err)
+		return "", time.Time{}, fmt.Errorf("读取响应内容失败: %w", err)
 	}
 
 	var result map[string]interface{}
 	if err := json.Unmarshal(body, &result); err != nil {
-		return "", fmt.Errorf("解析响应 JSON 失败: %w", err)
+		return "", time.Time{}, fmt.Errorf("解析响应 JSON 失败: %w", err)
 	}
 
 	// 钉钉接口在登录失效等场景下返回 {"code":"1003"} 形式的错误，优先检查
 	if code, ok := result["code"].(string); ok && code != "" && code != "0" {
-		return "", fmt.Errorf("钉钉接口返回错误(code=%s)，登录可能已过期，请使用 -login 参数重新登录", code)
+		return "", time.Time{}, fmt.Errorf("钉钉接口返回错误(code=%s)，登录可能已过期，请使用 -login 参数重新登录", code)
 	}
 
 	// 安全地获取嵌套字段
 	openLiveDetailModel, ok := result["openLiveDetailModel"].(map[string]interface{})
 	if !ok {
-		return "", fmt.Errorf("响应格式错误: 未找到 openLiveDetailModel 字段（登录可能已过期，请使用 -login 参数重新登录）")
+		return "", time.Time{}, fmt.Errorf("响应格式错误: 未找到 openLiveDetailModel 字段（登录可能已过期，请使用 -login 参数重新登录）")
 	}
 
 	title, ok := openLiveDetailModel["title"].(string)
 	if !ok {
-		return "", fmt.Errorf("响应格式错误: 未找到 title 字段（登录可能已过期，请使用 -login 参数重新登录）")
+		return "", time.Time{}, fmt.Errorf("响应格式错误: 未找到 title 字段（登录可能已过期，请使用 -login 参数重新登录）")
 	}
 
 	playbackUrl, ok := openLiveDetailModel["playbackUrl"].(string)
 	if !ok {
-		return "", fmt.Errorf("响应格式错误: 未找到 playbackUrl 字段（登录可能已过期，请使用 -login 参数重新登录）")
+		return "", time.Time{}, fmt.Errorf("响应格式错误: 未找到 playbackUrl 字段（登录可能已过期，请使用 -login 参数重新登录）")
 	}
+
+	publishedAt := extractPublishedAt(openLiveDetailModel)
 
 	fmt.Println("标题:", title)
 	fmt.Println("回放地址:", playbackUrl)
+	if !publishedAt.IsZero() {
+		fmt.Println("发布时间:", publishedAt.Format("2006-01-02 15:04:05"))
+	}
 
 	// 检查回放地址是否为空
 	if playbackUrl == "" {
-		return "", fmt.Errorf("回放地址为空，可能直播尚未结束或回放不可用")
+		return "", publishedAt, fmt.Errorf("回放地址为空，可能直播尚未结束或回放不可用")
 	}
 
 	tempDir, err := tempDirFactory(saveDir)
 	if err != nil {
-		return title, err
+		return title, publishedAt, err
 	}
 	fmt.Printf("临时文件夹创建成功: %s\n", tempDir)
 	defer tempDirCleanup(tempDir)
 
-	if err := M3u8Down(title, playbackUrl, saveDir, Thread, tempDir); err != nil {
-		return title, err
+	name := videoName(title, publishedAt)
+	fmt.Println("保存文件名:", name)
+
+	if err := M3u8Down(name, playbackUrl, saveDir, Thread, tempDir); err != nil {
+		return title, publishedAt, err
 	}
 
-	return title, nil
+	return title, publishedAt, nil
 }
 
 // extractParamsFromURL 从多种格式的钉钉直播URL中提取 roomId 和 liveUuid
@@ -582,33 +615,32 @@ func extractParamsFromURL(urlStr string) (roomId, liveUuid string, err error) {
 // processURL 函数接收一个URL字符串作为参数，并解析出其中的roomId和liveUuid参数
 // 然后调用getLiveRoomPublicInfo函数进行处理
 // 如果URL解析出错或缺少roomId或liveUuid参数，则打印错误信息并返回
-func processURL(urlStr, saveDir string, Thread int, config *Config, videoListFile, fileExt string, processedCount int) (string, error) {
+func processURL(urlStr, saveDir string, Thread int, config *Config, videoListFile, fileExt string, processedCount int) (string, time.Time, error) {
 	roomId, liveUuid, err := extractParamsFromURL(urlStr)
 	if err != nil {
-		return "", err
+		return "", time.Time{}, err
 	}
 
 	if roomId == "" || liveUuid == "" {
-		return "", fmt.Errorf("URL 中缺少 roomId 或 liveUuid 参数，请确保 URL 格式正确。支持的格式包括：\n" +
+		return "", time.Time{}, fmt.Errorf("URL 中缺少 roomId 或 liveUuid 参数，请确保 URL 格式正确。支持的格式包括：\n" +
 			"1. 查询参数格式: ?roomId=XXX&liveUuid=XXX\n" +
 			"2. Hash路由格式: #/live?roomId=XXX&liveUuid=XXX\n" +
 			"3. 路径参数格式: /live-room/XXX/XXX")
 	}
 
-	title, err := getLiveRoomPublicInfo(roomId, liveUuid, saveDir, Thread, config)
+	title, publishedAt, err := getLiveRoomPublicInfo(roomId, liveUuid, saveDir, Thread, config)
 
 	// 下载完成后立即追加标题到视频列表文件
 	if err == nil && videoListFile != "" && title != "" {
-		// 清理文件名中的非法字符
-		sanitizedTitle := sanitizeFileName(title)
-		if appendErr := appendTitleToVideoListFile(videoListFile, sanitizedTitle, fileExt, processedCount, saveDir); appendErr != nil {
+		name := videoName(title, publishedAt)
+		if appendErr := appendTitleToVideoListFile(videoListFile, name, fileExt, processedCount, saveDir); appendErr != nil {
 			fmt.Printf("警告: 追加标题到视频列表文件失败: %v\n", appendErr)
 		} else {
-			fmt.Printf("标题已添加到视频列表文件: %s (原始标题: %s)\n", sanitizedTitle, title)
+			fmt.Printf("标题已添加到视频列表文件: %s (原始标题: %s)\n", name, title)
 		}
 	}
 
-	return title, err
+	return title, publishedAt, err
 }
 
 // processURLFromFile 从文件中读取URL进行处理
@@ -634,7 +666,7 @@ func processURLFromFile(filePath, saveDir string, Thread int, config *Config, vi
 
 		processedCount++ // 只有实际处理的URL才递增
 		fmt.Printf("\n[%d] 处理 URL: %s\n", processedCount, urlStr)
-		title, err := processURL(urlStr, saveDir, Thread, config, videoListFile, fileExt, processedCount)
+		title, _, err := processURL(urlStr, saveDir, Thread, config, videoListFile, fileExt, processedCount)
 		if err != nil {
 			errMsg := fmt.Errorf("第 %d 行处理失败: %w", lineNum, err)
 			fmt.Println(errMsg)
@@ -824,7 +856,7 @@ func main() {
 
 	// 处理URL
 	if *urlFlag != "" {
-		_, err = processURL(*urlFlag, *saveDir, *Thread, config, *videoListFile, fileExt, 1)
+		_, _, err = processURL(*urlFlag, *saveDir, *Thread, config, *videoListFile, fileExt, 1)
 	} else if *urlFile != "" {
 		_, err = processURLFromFile(*urlFile, *saveDir, *Thread, config, *videoListFile, fileExt)
 	}
@@ -868,8 +900,8 @@ func createVideoListFile(filePath string, fileExt string) error {
 	return nil
 }
 
-// appendTitleToVideoListFile 向视频列表文件追加标题
-func appendTitleToVideoListFile(filePath, title, fileExt string, processedCount int, saveDir string) error {
+// appendTitleToVideoListFile 向视频列表文件追加视频文件名
+func appendTitleToVideoListFile(filePath, name, fileExt string, processedCount int, saveDir string) error {
 	// 以追加模式打开文件
 	file, err := os.OpenFile(filePath, os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
@@ -877,7 +909,7 @@ func appendTitleToVideoListFile(filePath, title, fileExt string, processedCount 
 	}
 	defer file.Close()
 
-	videoPath := filepath.Join(saveDir, title+".mp4")
+	videoPath := filepath.Join(saveDir, name+".mp4")
 	relPath, err := filepath.Rel(filepath.Dir(filePath), videoPath)
 	if err != nil {
 		return fmt.Errorf("计算相对路径失败: %w", err)
@@ -885,13 +917,13 @@ func appendTitleToVideoListFile(filePath, title, fileExt string, processedCount 
 
 	switch fileExt {
 	case ".txt":
-		_, err = file.WriteString(title + "\n")
+		_, err = file.WriteString(name + "\n")
 	case ".m3u", ".m3u8":
 		_, err = file.WriteString(filepath.ToSlash(relPath) + "\n")
 	case ".dpl":
 		_, err = file.WriteString(strconv.Itoa(processedCount) + "*file*" + relPath + "\n")
 	default:
-		_, err = file.WriteString(title + "\n")
+		_, err = file.WriteString(name + "\n")
 	}
 	if err != nil {
 		return fmt.Errorf("写入文件失败: %w", err)
